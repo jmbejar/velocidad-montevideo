@@ -8,7 +8,6 @@ from __future__ import annotations
 import time
 
 import altair as alt
-import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
@@ -355,15 +354,14 @@ if metric["invert"]:
     weight = vmax - weight.clip(vmin, vmax)
 frame["weight"] = weight.clip(lower=0).fillna(0)
 
-# deck.gl otherwise normalises the cloud against its single hottest cell, so a
-# pair of near-stopped sensors sitting together saturates the scale and flattens
-# the whole rest of the city into the bottom step. Anchoring the domain to the
-# spread of the data instead keeps the middle of the range legible; the ends are
-# percentiles rather than min/max so one outlier cannot reclaim the scale.
-heat_lo = float(np.percentile(frame["weight"], 10))
-heat_hi = float(np.percentile(frame["weight"], 92))
-if heat_hi <= heat_lo:  # degenerate slice: fall back to the full spread
-    heat_lo, heat_hi = float(frame["weight"].min()), float(frame["weight"].max() or 1)
+# The cloud gets the *same absolute domain as the dots*, expressed in weight
+# space. Left to itself deck.gl normalises against the hottest cell in the
+# current slice, which is wrong twice over: the cloud disagrees with the dot
+# drawn on top of it, and the scale silently rescales every time the slider
+# moves -- so 03:00, where nothing is congested, comes out as red as 18:00 and
+# the animation cannot show the rush hour building. A fixed domain means one
+# colour means one value, at every hour.
+heat_lo, heat_hi = (0.0, vmax - vmin) if metric["invert"] else (vmin, vmax)
 
 def label(value, formatter) -> str:
     return "no data" if pd.isna(value) else formatter(value)
@@ -453,10 +451,11 @@ st.pydeck_chart(
 st.markdown(legend, unsafe_allow_html=True)
 if layer_choice != "Sensors only":
     st.caption(
-        f"The cloud is the *average* reading around each spot, scaled to the "
-        f"{metric_name.lower()} range of this slice — so the middle of the range "
-        "stays legible and a single stalled sensor cannot wash the city out. It "
-        "interpolates between 442 points; read the dots for actual measurements."
+        "The cloud is the *average* reading around each spot, on the same fixed "
+        "scale as the dots and as every other time of day — so colours are "
+        "comparable as you move the slider. It interpolates between sensors, and "
+        "draws a lone sensor more strongly than one of thirty in a cluster; read "
+        "the dots for actual measurements."
     )
 
 # --- time-of-day profile -----------------------------------------------------

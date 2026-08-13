@@ -161,10 +161,15 @@ sensors, and both had to be overridden:
   serialises a bare Python string as the accessor expression `"@@=MEAN"`, which
   deck.gl evaluates to `undefined` before silently falling back to `SUM`;
   `pdk.types.String("MEAN")` is required to pass it as a literal.
-- **`colorDomain` defaults to the single hottest cell**, so one pair of adjacent
-  near-stopped sensors saturates the scale and squashes the rest of the city
-  into the bottom step. It is pinned to the 10th–92nd percentile of the current
-  slice, so one outlier cannot reclaim the ramp.
+- **`colorDomain` defaults to the hottest cell in the current slice**, which is
+  wrong twice over. The cloud disagrees with the dot drawn on top of it, and the
+  scale silently rescales every time the slider moves — so 03:00, where the city
+  averages 42 km/h and the median sensor is at *zero* congestion, came out as red
+  as 18:00, and the Play animation could not show the rush hour building. It is
+  pinned to the metric's own fixed domain, the same one the dots use, so one
+  colour means one value at every hour. (An earlier version used per-slice
+  percentiles to stretch the mid-range; that was compensating for the `SUM` bug
+  above, and became actively misleading once `MEAN` fixed it.)
 
 `MEAN` fixes `SUM`'s density bias but has one of its own, worth knowing when
 reading the map: **the same value draws darker where sensors are sparse.** The
