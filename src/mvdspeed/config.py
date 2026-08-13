@@ -20,6 +20,54 @@ DETECTORS_PARQUET = DATA_PROCESSED / "detectors.parquet"
 # is built from and are not committed.
 STREETS_PARQUET = PROJECT_ROOT / "data" / "streets.parquet"
 
+# --- Source catalogue --------------------------------------------------------
+# The monthly files are enumerated through CKAN's package_show, not by scraping
+# the dataset page and not by guessing URLs. Both alternatives break on things
+# the catalogue actually does:
+#
+#   - The filenames change era to era. The 2021 files are named
+#     `autoscope_01_2021_velocidad.csv`; from mid-2025 they are
+#     `velocidad_promedio_julio_2026.zip`. Nothing about the first pattern
+#     predicts the second.
+#   - The `format` field lies. July 2026 is labelled "CSV" and its URL ends in
+#     `.zip`, and the distinct values of `format` across the resources include
+#     the string "csv zip". So the archive type is read off the URL extension
+#     and from nothing else.
+#
+# 68 resources as of August 2026, January 2021 onward, one per month with no gaps.
+# Eight of them (July-December 2023, July and August 2025) carry a null `size`,
+# which looks like a missing file and is not one: all eight serve normal CSVs when
+# asked, verified by range request. So `size` is used as a resume check when it is
+# present and simply skipped when it is not -- never as evidence that a month does
+# not exist.
+CKAN_API = "https://catalogodatos.gub.uy/api/3/action/package_show"
+DATASET_SLUG = "velocidad-promedio-vehicular-en-las-principales-avenidas-de-montevideo"
+
+# Downloads are stored exactly as published -- a `.zip` stays zipped. The ETL
+# extracts one month at a time to a scratch file and deletes it after ingest, so
+# peak disk is the archive plus one expanded month (~800 MB) rather than the
+# ~51 GB the whole history would occupy uncompressed. Keeping the bytes as
+# published is also what lets the ingest log verify a file against the size the
+# catalogue reports for it.
+#
+# The month is read from the CKAN resource *title* ("Velocidad promedio - Marzo
+# 2024") and then checked against the modal `fecha` in the readings themselves.
+# Titles are the part most likely to be renamed; the timestamps are the data.
+MONTHS_ES = (
+    "Enero",
+    "Febrero",
+    "Marzo",
+    "Abril",
+    "Mayo",
+    "Junio",
+    "Julio",
+    "Agosto",
+    "Septiembre",
+    "Octubre",
+    "Noviembre",
+    "Diciembre",
+)
+
 # --- Data cleaning -----------------------------------------------------------
 # Readings above this are sensor errors (the raw file tops out at 540 km/h on
 # urban streets). ~0.24% of rows.
