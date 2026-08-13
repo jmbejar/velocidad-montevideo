@@ -17,12 +17,21 @@ uv run streamlit run src/mvdspeed/app.py                         # serve
 The ETL turns the 262 MB / 3.1 M-row CSV into a 2 MB parquet pair in about 25
 seconds. Re-run it when a new month's file is published.
 
+Road geometry for the street layer ships with the repo
+(`data/streets.parquet`), so nothing else is needed. `uv run mvdspeed-osm
+--refresh` re-fetches it from Overpass, which is worth doing only when the
+sensor set moves onto roads the current extract does not cover.
+
 ## What the dashboard shows
 
 - **A map, four ways.** Colour by *Congestion* (how far below its own free-flow
   speed a sensor is), *Average speed*, *vs. its own typical* (where this time of
   day is unusual for that specific spot), or *Reading volume* as a coverage
   sanity check.
+- **Three ways to draw it**: the sensors as dots, a smooth heat *surface*
+  between them, or the *streets* themselves — the avenues painted along their
+  real OSM geometry, which is the only one of the three that does not imply the
+  measurement covers ground it never saw.
 - **A time-of-day slider** over 30-minute buckets, with a ▶ Play button that
   animates the full day, and an all-day-average toggle. Colours are on a fixed
   scale, so hours are comparable as it runs.
@@ -135,6 +144,8 @@ src/mvdspeed/
   etl.py      CSV -> parquet (duckdb)
   data.py     loading and slicing
   surface.py  kernel-weighted heat surface over the point sensors
+  streets.py  sensor -> road matching, and the three reach models
+  osm.py      one-off Overpass fetch -> data/streets.parquet
   colors.py   value -> colour scales and legends
   app.py      the Streamlit dashboard
 ```
@@ -211,6 +222,65 @@ as visibly pixelated. Two notes for anyone touching this:
 Unsupported cells still get a colour (the ramp's low end) and are hidden with
 alpha alone, so bilinear filtering has no black to bleed in from at the edges.
 
+### Colouring the avenues instead
+
+The surface fixed *how* the estimate was computed but not *what shape* it was
+drawn as. Painting an area still implies areal support for a linear measurement:
+a sensor watches one stretch of one avenue, not the neighbourhood around it. The
+street layer draws the roads themselves (`streets.py`), which also disposes of
+the surface's worst artefact for free — a coastal sensor can no longer bleed
+1.2 km out over the bay, because there is no road there to paint.
+
+The matching this needs looked like the hard part and turned out not to be, once
+the question was asked the right way round. Matching `Bv. Artgias` to `Bulevar
+General Artigas` from the string alone is hard. But every sensor already carries
+a coordinate, so **proximity does the join and the name only disambiguates**
+between the two-to-four roads meeting at that corner — a much easier job.
+Names are compared on normalized tokens (accents stripped, `Avenida`/`Bulevar`/
+`General` dropped), with two rules that each pay for themselves:
+
+- a single-letter token matches a word beginning with it, which is what carries
+  `L A de Herrera` to `Avenida Luis Alberto de Herrera`;
+- on tokens of five characters or more, a `difflib` ratio of 0.85 counts as a
+  match, which absorbs `artgias` → `artigas` (0.86) while correctly rejecting
+  `colonia` → `colorado` (0.67). An earlier four-character prefix rule accepted
+  both, and quietly painted the wrong avenue.
+
+That lands **392 of the 406 mappable sites (97%)** on a road. The 14 that miss
+are genuinely not streets — `Salida Pereira Rossell`, `Tunel Av Italia`,
+`Entrada Nuevocentro`, `Circ Batlle W` — and they are left as dots and counted in
+the data-quality line rather than snapped to whatever road happens to be nearest.
+Painting a whole avenue from a sensor that was really watching the cross street
+is a worse failure than admitting the miss.
+
+Two details that are load-bearing:
+
+- Corridors are grouped by normalized name and then split into spatially
+  connected components, because two unrelated streets can share a name at
+  opposite ends of the city and merging them lets one sensor's colour teleport
+  across town. Endpoint matching alone would not do it either: a dual
+  carriageway like Bv Artigas is two parallel ways that never touch, so ways are
+  joined when their vertices land in the same ~100 m cell.
+- Distances are plain euclidean, but only ever taken *within one corridor*, and
+  that is what lets them stand in for distance along the road without a routing
+  graph. Sensors on the far side of the block are not candidates because they
+  are on a different corridor, not because the geometry says so.
+
+**Three reach models**, because "how much of the avenue may one sensor speak
+for" is a question about what you want to see, not one with a correct answer:
+*blend* is the surface's Gaussian confined to the road, smooth and interpolating;
+*nearest* hands the stretch to the closest sensor outright at the midpoint, so
+every painted metre is one real measurement; *stub* paints only 250 m either side
+and leaves the rest bare, which is the most literal thing the data supports.
+All three share the geometry and differ only in how a chunk picks its value, and
+all three feed opacity from the same kernel weight so the confidence channel
+keeps meaning one thing across them.
+
+Roads are drawn as ~60 m chunks, each its own two-point `PathLayer` path so it
+can carry its own colour. Those want **butt caps, not rounded**: at city zoom a
+60 m chunk is about as long as the line is wide, so rounded caps turn every one
+of them into a circle and the avenue renders as a string of beads.
+
 Two things fall out of this for free. Cell colours come from the **same**
 `colors.sequential()` / `colors.diverging()` the dots use, so the two layers
 cannot drift onto different scales — a bug that had to be fixed twice while the
@@ -227,11 +297,16 @@ meaningful, where a density cloud could not carry a sign at all.
   0.25–0.68 (p5–p95) where raw sensors span 0.09–0.93. The dots carry the real
   measurements.
 - It bleeds over water near the Rambla — a coastal sensor supports cells up to
-  1.2 km offshore and there is no coastline polygon here to mask against.
-- Painting an area still implies areal support for what is really a *linear*
-  measurement: a sensor measures one stretch of one road, not the neighbourhood
-  around it. Colouring the road segments themselves is the only real fix, and it
-  needs OSM geometry plus fuzzy matching against street names that include
-  `Bv. Artgias`.
+  1.2 km offshore and there is no coastline polygon here to mask against. The
+  street layer does not have this problem, since it only paints roads.
+- The street layer's distances are euclidean within a corridor, which stands in
+  for distance along the road only while the road does not double back on itself
+  inside the cutoff. The Rambla rounding Punta Carretas is the case where it
+  does, and a sensor there reaches slightly across the point rather than around
+  it.
+- 14 of the 406 mappable sensors match no road and appear only as dots. They are
+  mostly slip roads and tunnel approaches that the feed names as streets.
+- `data/streets.parquet` is a snapshot of OSM taken in May 2026. Nothing breaks
+  as the city changes; corridors just stop reflecting recent roadworks.
 - The basemap tiles come from CARTO's CDN, so the map needs network access
-  (no API key required).
+  (no API key required). The road geometry does not — it ships with the repo.

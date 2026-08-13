@@ -29,16 +29,12 @@ import numpy as np
 import pandas as pd
 
 from mvdspeed.config import (
-    CITY_LAT,
     KM_PER_DEG_LAT,
     SURFACE_BANDWIDTH_KM,
     SURFACE_CUTOFF_KM,
     SURFACE_STEP_KM,
+    km_per_deg_lon,
 )
-
-
-def _km_per_deg_lon(lat: float = CITY_LAT) -> float:
-    return KM_PER_DEG_LAT * float(np.cos(np.radians(lat)))
 
 
 @dataclass(frozen=True)
@@ -80,7 +76,7 @@ def kernel_surface(
     if usable.empty:
         return empty
 
-    km_lon = _km_per_deg_lon()
+    km_lon = km_per_deg_lon()
     sx = usable["lon"].to_numpy(dtype=float) * km_lon
     sy = usable["lat"].to_numpy(dtype=float) * KM_PER_DEG_LAT
 

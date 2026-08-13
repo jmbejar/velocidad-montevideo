@@ -13,11 +13,21 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
-from mvdspeed import colors, data as mvd, surface
+from mvdspeed import colors, data as mvd, streets, surface
 from mvdspeed.config import (
     BUCKET_MINUTES,
     GRIDLINE,
     MAX_PLAUSIBLE_SPEED,
+    STREET_ALPHA_GAMMA,
+    STREET_ALPHA_MAX,
+    STREET_ALPHA_MIN,
+    STREET_ALPHA_REF,
+    STREET_CUTOFF_KM,
+    STREET_STUB_KM,
+    STREET_WIDTH_M,
+    STREET_WIDTH_MAX_PX,
+    STREET_WIDTH_MIN_PX,
+    STREETS_PARQUET,
     SURFACE_ALPHA_GAMMA,
     SURFACE_ALPHA_MAX,
     SURFACE_ALPHA_MIN,
@@ -99,9 +109,74 @@ METRICS = {
 }
 
 
+# --- reach models -------------------------------------------------------------
+# How far one sensor's reading is drawn along the avenue it sits on. The three
+# answer different questions, so the choice is the reader's rather than ours.
+REACH_MODELS = {
+    "Blend along the avenue": {
+        "mode": streets.BLEND,
+        "help": (
+            "A distance-weighted average of the sensors on that avenue — the "
+            "surface's estimate, confined to the road. Reads best as a picture "
+            "of a corridor, and interpolates between sensors."
+        ),
+        "caption": (
+            f"Each stretch is a distance-weighted average of the sensors on that "
+            f"same avenue, fading out and stopping entirely more than "
+            f"{STREET_CUTOFF_KM:g} km along the road from any of them. Unlike the "
+            f"surface it never crosses to a neighbouring street, so the value "
+            f"stays on the road it was measured on."
+        ),
+    },
+    "Nearest sensor owns the stretch": {
+        "mode": streets.NEAREST,
+        "help": (
+            "Each stretch takes the colour of the closest sensor on its avenue, "
+            "handing over at the midpoint. Nothing is averaged, so every painted "
+            "metre is one real measurement."
+        ),
+        "caption": (
+            f"Each stretch takes the reading of the nearest sensor on its own "
+            f"avenue outright, handing over at the midpoint between two sensors "
+            f"and stopping {STREET_CUTOFF_KM:g} km out. Nothing is averaged: every "
+            f"painted metre carries one sensor's actual measurement, which is why "
+            f"the boundaries are abrupt."
+        ),
+    },
+    "Only the measured stretch": {
+        "mode": streets.STUB,
+        "help": (
+            "Paint only the road immediately around each sensor and leave the "
+            "rest bare. The most literal reading of the data, and the emptiest "
+            "map."
+        ),
+        "caption": (
+            f"Only the {STREET_STUB_KM * 1000:.0f} m of road either side of each "
+            f"sensor is painted and the rest is left bare. This is the most "
+            f"literal thing the data supports — a sensor watches one stretch of "
+            f"one avenue — and the gaps are the honest extent of what is known."
+        ),
+    },
+}
+
+
 @st.cache_resource(show_spinner="Loading sensor data…")
 def load_data() -> mvd.Dataset:
     return mvd.load()
+
+
+@st.cache_resource(show_spinner="Loading street geometry…")
+def load_streets() -> tuple[pd.DataFrame, pd.Series]:
+    """Road chunks, and the corridor each site was matched to.
+
+    The matching depends only on where the sensors are and what they are called,
+    both static, so it runs once per session rather than per slice.
+    """
+    chunks = pd.read_parquet(STREETS_PARQUET)
+    sites = load_data().sites
+    mappable = sites[sites["has_location"]]
+    assigned = streets.assign_corridors(mappable, chunks)
+    return chunks, pd.Series(assigned.to_numpy(), index=mappable["site_id"].to_numpy())
 
 
 @st.cache_data(show_spinner=False)
@@ -134,13 +209,29 @@ def surface_for(
 
 
 @st.cache_data(show_spinner=False)
+def street_field_for(
+    _key: tuple, dows: tuple[int, ...], buckets: tuple[int, ...], include_zeros: bool,
+    min_samples: int, column: str, mode: str, _metric_name: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Value and support per road chunk for one slice, cached like the surface.
+
+    Keyed on the slice and the reach model but not on colour, for the same
+    reason `surface_for` is: the ramp is applied afterwards.
+    """
+    chunks, assigned = load_streets()
+    frame = sites_at(_key, dows, buckets, include_zeros, min_samples)
+    frame = frame.assign(corridor_id=frame["site_id"].map(assigned))
+    return streets.street_field(chunks, frame, column, mode=mode)
+
+
+@st.cache_data(show_spinner=False)
 def profile(_key: tuple, dows: tuple[int, ...], include_zeros: bool) -> pd.DataFrame:
     return mvd.city_profile(load_data(), dows=list(dows), include_zeros=include_zeros)
 
 
 @st.cache_data(show_spinner=False)
-def streets(_key: tuple, names: tuple[str, ...], dows: tuple[int, ...],
-            include_zeros: bool) -> pd.DataFrame:
+def street_curves(_key: tuple, names: tuple[str, ...], dows: tuple[int, ...],
+                  include_zeros: bool) -> pd.DataFrame:
     return mvd.street_profile(
         load_data(), dows=list(dows), streets=list(names), include_zeros=include_zeros
     )
@@ -167,13 +258,35 @@ with st.sidebar:
 
     layer_choice = st.radio(
         "Map layer",
-        ["Surface + sensors", "Surface only", "Sensors only"],
+        [
+            "Surface + sensors",
+            "Surface only",
+            "Streets + sensors",
+            "Streets only",
+            "Sensors only",
+        ],
         index=0,
         help=(
             "The surface is a distance-weighted estimate between sensors, faded "
-            "where few sensors support it. The dots are the actual measurements."
+            "where few sensors support it. The streets carry the same estimate "
+            "along the actual roads, which is what a fixed sensor really "
+            "measures. The dots are the measurements themselves."
         ),
     )
+
+    show_streets = layer_choice in ("Streets + sensors", "Streets only")
+    reach_name = next(iter(REACH_MODELS))
+    if show_streets:
+        reach_name = st.radio(
+            "How far a sensor reaches",
+            list(REACH_MODELS),
+            index=0,
+            help=(
+                "A sensor sits at one intersection. This is how much of the "
+                "avenue it is allowed to speak for."
+            ),
+        )
+        st.caption(REACH_MODELS[reach_name]["help"])
 
     st.subheader("Days")
     scope_name = st.radio("Day scope", list(mvd.DAY_SCOPES), index=0)
@@ -331,6 +444,14 @@ if n_no_metric:
         f"{n_no_metric} hidden here for having no usable free-flow reference "
         "(under 10 km/h, too small to form a ratio)"
     )
+if show_streets:
+    n_unmatched = int(frame["site_id"].map(load_streets()[1]).isna().sum())
+    if n_unmatched:
+        notes.append(
+            f"{n_unmatched} could not be matched to a road confidently enough to "
+            "paint one — mostly slip roads and tunnel approaches the feed names "
+            "as streets — so they appear only as dots"
+        )
 if notes:
     st.caption("Data quality: " + "; ".join(notes) + ".")
 
@@ -372,11 +493,25 @@ def label(value, formatter) -> str:
     return "no data" if pd.isna(value) else formatter(value)
 
 
-frame["speed_label"] = frame["speed"].map(lambda v: f"{v:.1f}")
 frame["metric_label"] = frame[column].map(lambda v: label(v, metric["format"]))
-frame["congestion_label"] = frame["congestion"].map(
-    lambda v: label(v, lambda x: f"{x:.0%}")
+frame["subtitle"] = frame["from_street"] + " → " + frame["to_street"]
+frame["footnote"] = (
+    frame["samples"].map(lambda v: f"{v:,.0f}") + " readings · "
+    + frame["n_lanes"].astype(str) + " lanes"
 )
+
+# Lead with the metric being mapped, then the other two -- skipping whichever of
+# them the metric already is, so nothing is printed twice. The street layer has
+# only the mapped metric, so this extra detail is a per-layer column rather than
+# part of the shared template.
+detail = pd.Series("", index=frame.index)
+if column != "speed":
+    detail += "<br/>Average speed: " + frame["speed"].map(lambda v: f"{v:.1f}") + " km/h"
+if column != "congestion":
+    detail += "<br/>Congestion: " + frame["congestion"].map(
+        lambda v: label(v, lambda x: f"{x:.0%}")
+    )
+frame["detail"] = detail
 
 layers = []
 if layer_choice in ("Surface + sensors", "Surface only"):
@@ -427,7 +562,76 @@ if layer_choice in ("Surface + sensors", "Surface only"):
                 pickable=False,
             )
         )
-if layer_choice in ("Surface + sensors", "Sensors only"):
+if show_streets:
+    chunks, _ = load_streets()
+    values, support = street_field_for(
+        CACHE_KEY, dows, buckets, include_zeros, min_samples, column,
+        REACH_MODELS[reach_name]["mode"], metric_name,
+    )
+    painted = np.isfinite(values)
+    if painted.any():
+        drawn = chunks.loc[painted]
+        readings = pd.Series(values[painted])
+        # The same two functions the dots and the surface call, so a sensor and
+        # the road under it can never end up on different scales.
+        if metric["kind"] == "diverging":
+            rgb = colors.diverging(readings, limit, dark=dark_map)
+        else:
+            rgb = colors.sequential(
+                readings, vmin, vmax, invert=metric["invert"],
+                dark=dark_map, ramp=metric["ramp"],
+            )
+        alpha = surface.support_alpha(
+            support[painted],
+            alpha_min=STREET_ALPHA_MIN,
+            alpha_max=STREET_ALPHA_MAX,
+            reference=STREET_ALPHA_REF,
+            gamma=STREET_ALPHA_GAMMA,
+        )
+        paths = pd.DataFrame(
+            {
+                "path": [
+                    [[x0, y0], [x1, y1]]
+                    for x0, y0, x1, y1 in zip(
+                        drawn["lon0"], drawn["lat0"], drawn["lon1"], drawn["lat1"]
+                    )
+                ],
+                "color": [
+                    [int(r), int(g), int(b), int(a)]
+                    for (r, g, b), a in zip(rgb, np.clip(alpha * 255, 0, 255))
+                ],
+                "street": drawn["name"].to_numpy(),
+                "subtitle": reach_name.lower(),
+                "metric_label": [metric["format"](v) for v in readings],
+                "detail": "",
+                "footnote": "estimated along the road, not measured here",
+            }
+        )
+        layers.append(
+            pdk.Layer(
+                "PathLayer",
+                data=paths,
+                get_path="path",
+                get_color="color",
+                # Metres, so the line keeps its real width as you zoom, with
+                # pixel bounds so it survives at city zoom without swallowing
+                # the dots up close.
+                get_width=STREET_WIDTH_M,
+                width_min_pixels=STREET_WIDTH_MIN_PX,
+                width_max_pixels=STREET_WIDTH_MAX_PX,
+                # Butt caps, not rounded. Each chunk is its own two-point path
+                # so it can carry its own colour, and at city zoom a 60 m chunk
+                # is about as long as the line is wide -- rounded caps turn every
+                # one of them into a circle and the avenue renders as a string of
+                # beads. Butt caps let consecutive chunks tile exactly.
+                cap_rounded=False,
+                joint_rounded=True,
+                pickable=True,
+                auto_highlight=True,
+            )
+        )
+
+if layer_choice in ("Surface + sensors", "Streets + sensors", "Sensors only"):
     layers.append(
         pdk.Layer(
             "ScatterplotLayer",
@@ -445,22 +649,16 @@ if layer_choice in ("Surface + sensors", "Sensors only"):
         )
     )
 
-# Lead with the metric being mapped, then the other two -- skipping whichever of
-# them the metric already is, so nothing is printed twice.
-tooltip_rows = [f"{metric_name}: <b>{{metric_label}}</b>"]
-if column != "speed":
-    tooltip_rows.append("Average speed: {speed_label} km/h")
-if column != "congestion":
-    tooltip_rows.append("Congestion: {congestion_label}")
-
+# One template both layers can fill: a sensor and a stretch of road carry
+# different fields, so the parts that differ arrive as pre-rendered columns.
 tooltip = {
     "html": (
         "<div style='font-family:system-ui,sans-serif;font-size:12px;max-width:260px'>"
         "<b>{street}</b><br/>"
-        "<span style='opacity:.75'>{from_street} → {to_street}</span><hr "
+        "<span style='opacity:.75'>{subtitle}</span><hr "
         "style='margin:4px 0;border:none;border-top:1px solid rgba(255,255,255,.2)'/>"
-        + "<br/>".join(tooltip_rows)
-        + "<br/><span style='opacity:.75'>{samples} readings · {n_lanes} lanes</span>"
+        f"{metric_name}: <b>{{metric_label}}</b>{{detail}}"
+        "<br/><span style='opacity:.75'>{footnote}</span>"
         "</div>"
     ),
     "style": {"backgroundColor": "#0b0b0b", "color": "#ffffff", "borderRadius": "6px"},
@@ -480,7 +678,19 @@ st.pydeck_chart(
     height=560,
 )
 st.markdown(legend, unsafe_allow_html=True)
-if layer_choice != "Sensors only":
+if show_streets:
+    note = (
+        REACH_MODELS[reach_name]["caption"]
+        + " Sensors are matched to roads by position first and street name "
+        "second, so the name only has to tell apart the roads meeting at a "
+        "known corner."
+    )
+    # Only the blend averages, and only the sensor layer shows the raw values,
+    # so this advice is worth giving in exactly one of the six combinations.
+    if reach_name == "Blend along the avenue" and layer_choice == "Streets + sensors":
+        note += " Read the dots for the actual measurements."
+    st.caption(note)
+elif layer_choice != "Sensors only":
     st.caption(
         "The surface is a distance-weighted average of the sensors near each "
         "point — the same estimate everywhere, so it no longer matters how many "
@@ -586,7 +796,7 @@ with right:
         help="Up to three, so every line stays tellable apart under colour-vision deficiency.",
     )
     if chosen:
-        street_frame = streets(CACHE_KEY, tuple(chosen), dows, include_zeros)
+        street_frame = street_curves(CACHE_KEY, tuple(chosen), dows, include_zeros)
         # Slots 1-3 of the categorical theme, stepped for the active surface.
         # These three are the set that clears the all-pairs colour-vision gates.
         # The chart surface is always light, so these are the light steps.

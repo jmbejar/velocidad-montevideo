@@ -13,3 +13,7 @@ data/raw/*
 # Derived parquet: regenerate with `uv run mvdspeed-etl <csv>`.
 data/processed/*
 !data/processed/.gitkeep
+
+# Raw Overpass responses (~11 MB). The chunk table built from them,
+# data/streets.parquet, *is* committed so the app never needs Overpass.
+data/osm/

@@ -8,9 +8,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 
+DATA_OSM = PROJECT_ROOT / "data" / "osm"
+
 # ETL outputs
 MEASUREMENTS_PARQUET = DATA_PROCESSED / "measurements.parquet"
 DETECTORS_PARQUET = DATA_PROCESSED / "detectors.parquet"
+
+# Road geometry. Unlike the parquet above this is committed: it is small, it
+# changes only when OSM does, and the app's one network dependency should stay
+# the basemap CDN. The raw Overpass responses under data/osm/ are the cache it
+# is built from and are not committed.
+STREETS_PARQUET = PROJECT_ROOT / "data" / "streets.parquet"
 
 # --- Data cleaning -----------------------------------------------------------
 # Readings above this are sensor errors (the raw file tops out at 540 km/h on
@@ -107,6 +115,66 @@ SURFACE_ALPHA_GAMMA = 0.7
 KM_PER_DEG_LAT = 111.0
 CITY_LAT = -34.9
 
+# --- Street corridors ---------------------------------------------------------
+# The surface paints an *area* for what is really a linear measurement: a sensor
+# watches one stretch of one avenue, not the neighbourhood around it. The street
+# layer draws the roads themselves, using OSM geometry fetched once by
+# `mvdspeed-osm` and committed as data/streets.parquet.
+#
+# Sensor -> road matching is done by proximity first and name second, which is
+# what makes it tractable. Every sensor already carries a coordinate, so the name
+# only has to disambiguate between the two-to-four roads meeting at the
+# intersection it sits on -- a much easier job than identifying a street from
+# `Bv. Artgias` alone. Names are compared on normalized tokens (accents stripped,
+# generic words like Avenida/Bulevar/General dropped), so `L A de Herrera`
+# reaches `Avenida Luis Alberto de Herrera`.
+OSM_BBOX = (-34.94, -56.29, -34.79, -56.03)  # south, west, north, east
+OSM_HIGHWAY_CLASSES = {
+    # Fetched as separate queries: asking Overpass for all of them at once times
+    # out on the public endpoints, while each half returns comfortably.
+    "major": "motorway|trunk|primary|secondary|tertiary",
+    "minor": "residential|unclassified|living_street",
+}
+
+# A way's own nodes are the chunks, but OSM digitizes a straight kilometre with
+# very few of them, and a chunk is one flat colour. Anything longer is split.
+STREET_CHUNK_M = 60.0
+
+# How far a sensor may sit from a road and still be considered to be on it.
+# Sensors are placed at intersections and the coordinates are rounded, so a true
+# match lands 5-40 m off the centreline; the dual carriageways (Bv Artigas, Av
+# Italia) are mapped as two ways and the far one can be ~30 m further still.
+STREET_SNAP_M = 120.0
+
+# Name-similarity floor, on the 0-1 token score. Below this the site keeps no
+# corridor at all rather than being snapped to whatever road happens to be
+# nearest -- painting a whole avenue from a sensor that was actually measuring
+# the cross street is a worse failure than leaving it as a dot. The count of
+# unmatched sites is reported in the app.
+STREET_NAME_FLOOR = 0.6
+
+# The reach of one sensor along its corridor. Same Gaussian as the surface, but
+# the bandwidth is tighter: the surface is smoothing across a neighbourhood,
+# where this is interpolating along a single avenue between sensors that sit
+# roughly 400-800 m apart.
+STREET_BANDWIDTH_KM = 0.4
+STREET_CUTOFF_KM = 1.0      # past this the corridor is simply not painted
+STREET_STUB_KM = 0.25       # the "measured stretch" reach model
+
+# Support here is a sum of kernel weights over the sensors on *one corridor*, so
+# it lands between 0 and ~3 where the surface's spans 0-52. Reusing
+# SURFACE_ALPHA_REF (8.0) drew every avenue at the 0.10 floor, i.e. invisible.
+STREET_ALPHA_MAX = 0.95
+STREET_ALPHA_MIN = 0.15
+STREET_ALPHA_REF = 1.2      # one sensor at ~250 m already counts as backed
+STREET_ALPHA_GAMMA = 0.6
+
+# Drawn in metres so the line keeps its real width as you zoom, with pixel
+# bounds so it stays visible at city zoom and does not swallow the dots up close.
+STREET_WIDTH_M = 22.0
+STREET_WIDTH_MIN_PX = 2.5   # at city zoom the real width is under a pixel
+STREET_WIDTH_MAX_PX = 10.0
+
 # --- Palette (see dataviz skill: sequential = one hue, diverging = 2 + gray) --
 SURFACE_LIGHT = "#fcfcfb"
 SURFACE_DARK = "#1a1a19"
@@ -170,6 +238,13 @@ TEXT_PRIMARY = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
 TEXT_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
+
+
+def km_per_deg_lon(lat: float = CITY_LAT) -> float:
+    """Longitude scale at a given latitude, for the local flat approximation."""
+    from math import cos, radians
+
+    return KM_PER_DEG_LAT * cos(radians(lat))
 
 
 def hex_to_rgb(value: str) -> list[int]:
