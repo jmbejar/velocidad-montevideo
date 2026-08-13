@@ -5,14 +5,26 @@ description = "Exploration of Montevideo average-speed sensor open data"
 requires-python = ">=3.12"
 dependencies = [
     "duckdb>=1.1",
+    # numpy carries the kernel surface, the street field and the model fit, and
+    # pillow encodes the surface texture. Both arrived transitively through
+    # pandas and streamlit and both are imported directly, so they are declared
+    # rather than borrowed.
+    "numpy>=2.0",
     "pandas>=2.2",
+    "pillow>=10.0",
     "pyarrow>=17",
     "streamlit>=1.38",
     "pydeck>=0.9",
     "altair>=5.4",
 ]
 
+[dependency-groups]
+# The first tests in this repo. Everything so far could be checked by looking at
+# the map; the panel builder and the model fit cannot.
+dev = ["pytest>=8.0"]
+
 [project.scripts]
+mvdspeed-fetch = "mvdspeed.fetch:main"
 mvdspeed-etl = "mvdspeed.etl:main"
 mvdspeed-osm = "mvdspeed.osm:main"
 
