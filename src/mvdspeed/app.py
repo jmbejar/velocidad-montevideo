@@ -314,6 +314,12 @@ if dataset.n_stalled:
         f"{dataset.n_stalled} sit pinned under 3 km/h for fifteen hours a day yet "
         "run freely at 3am — excluded as not watching through traffic"
     )
+if dataset.n_dead_lanes:
+    notes.append(
+        f"{dataset.n_dead_lanes} individual lane detectors never measured movement "
+        f"and are dropped, {dataset.n_sites_with_dead_lanes} of them at sites that "
+        "are otherwise fine — lane counts and zero shares here exclude them"
+    )
 if dataset.n_without_location:
     notes.append(
         f"{dataset.n_without_location} share the feed's placeholder coordinate "

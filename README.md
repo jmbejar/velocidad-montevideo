@@ -62,7 +62,7 @@ Averaging them in would drag every quiet street and every night hour toward
 zero, so they are excluded by default and reported separately as the "Zero
 readings" figure. The sidebar has a toggle if you want the other convention.
 
-Four further sensor-quality rules, all in `config.py`:
+Five further sensor-quality rules, all in `config.py`:
 
 - **13 sensors share one placeholder coordinate.** The feed falls back to
   `(-34.890561, -56.220631)` — a point out in the bay — when it has no real
@@ -76,8 +76,20 @@ Four further sensor-quality rules, all in `config.py`:
   their readings in the daily curve, where position is irrelevant, and are left
   off the map and the rankings, where it is not.
 
-- **16 sensors never recorded moving traffic** in the whole month (one reports
-  ~1.6 km/h across 5,930 readings). They are treated as stuck and excluded.
+- **37 of 908 lane detectors never measured moving traffic** (or never averaged
+  3 km/h) across the whole month, and are dropped before anything is aggregated.
+  This test has to run per *lane*, because the raw file is one row per lane and a
+  healthy lane hides a dead one when they are averaged together: `Barradas`
+  (Av Italia → Rambla) advertised two lanes, but lane 1 logged 3,168 zeros and
+  never a single moving vehicle. Judged at site level the site looks fine,
+  because lane 2 is. Ten otherwise-healthy sites had a lane dropped this way.
+  Their speeds barely move — a dead lane contributes only zeros, which are
+  excluded by default — but it stops them inflating lane counts and the
+  "Zero readings" figure, which fell from 1.9% to 0.7% at 06:00 once the dead
+  detectors stopped voting.
+- **16 sites where every lane is dead** are treated as stuck and excluded
+  outright, but kept in the inventory so the exclusion stays reportable rather
+  than the site silently vanishing from the totals.
 
 - **7 sensors are not watching through traffic.** They sit pinned under 3 km/h
   for the fifteen hours from 07:00 to 22:00, then report 9–26 km/h at 3am. Real
@@ -89,13 +101,14 @@ Four further sensor-quality rules, all in `config.py`:
   measured on weekdays, since weekend mornings dilute the daytime window enough
   to hide one of the seven. Excluded from every view, including the city curve —
   a detector stuck at 1.9 km/h all month would otherwise drag it down.
-- **Congestion is a ratio**, so it is left undefined rather than faked for the 7
+- **Congestion is a ratio**, so it is left undefined rather than faked for the 3
   sensors whose free-flow reference is under 10 km/h — at that scale the ±0.5
   km/h rounding is already worth 5%. This is what stopped a sensor crawling at
   1 km/h from being drawn as "0% congested".
 
-Of 442 sites, **404 are mappable** at a typical rush-hour slice once the stuck,
-stalled and unlocatable sensors are set aside.
+Of 442 sites, **404 are mappable** at a typical rush-hour slice:
+442 − 16 stuck − 7 stalled − 13 unlocatable = 406, of which 404 clear the
+minimum-readings floor.
 
 Street names in the source are inconsistent (`Bv Artigas` vs `Bv. Artgias`,
 `Bv Espana` vs `Bv. España`, trailing spaces). The ETL trims whitespace but does
@@ -108,7 +121,8 @@ The ETL aggregates to 30-minute buckets but stores **sums and counts, not
 averages**, so every mean the app computes later — over any set of days, hours,
 or streets — is exact rather than an average of averages. A "site" is one
 physical measuring point; the raw file has one row per *lane*, and several lane
-detectors share a coordinate, so 998 detectors collapse to 442 sites.
+detectors share a coordinate. Of 908 lane detectors that reported anything usable,
+871 survive the dead-lane test, and they sit at 442 sites.
 
 Free-flow speed per sensor is its 85th-percentile non-zero reading, the standard
 traffic-engineering proxy — robust to both jams and the occasional speeder.

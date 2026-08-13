@@ -60,6 +60,16 @@ class Dataset:
         return int(self.sites["is_stalled"].sum())
 
     @property
+    def n_dead_lanes(self) -> int:
+        """Lane detectors dropped by the ETL for never measuring movement."""
+        return int(self.sites["n_dead_lanes"].fillna(0).sum())
+
+    @property
+    def n_sites_with_dead_lanes(self) -> int:
+        """Still-usable sites that had at least one lane detector dropped."""
+        return int((self.sites["is_usable"] & (self.sites["n_dead_lanes"] > 0)).sum())
+
+    @property
     def usable_site_ids(self) -> pd.Series:
         return self.sites.loc[self.sites["is_usable"], "site_id"]
 

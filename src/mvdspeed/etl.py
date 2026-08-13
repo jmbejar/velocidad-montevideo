@@ -20,6 +20,7 @@ from mvdspeed.config import (
     BUCKET_MINUTES,
     DATA_PROCESSED,
     DETECTORS_PARQUET,
+    FLATLINE_SPEED,
     FREE_FLOW_PERCENTILE,
     MAX_PLAUSIBLE_SPEED,
     MAX_STREETS_PER_COORD,
@@ -132,7 +133,7 @@ def build(csv_path: Path, con: duckdb.DuckDBPyConnection | None = None) -> None:
 
     con.execute(
         f"""
-        CREATE OR REPLACE TABLE valid AS
+        CREATE OR REPLACE TABLE valid_all AS
         SELECT c.*, s.site_id,
                -- bucket index within the day: 0 .. (1440/BUCKET_MINUTES - 1)
                (datepart('hour', c.time) * 60 + datepart('minute', c.time))
@@ -140,6 +141,56 @@ def build(csv_path: Path, con: duckdb.DuckDBPyConnection | None = None) -> None:
         FROM clean c
         JOIN sites s USING (lat, lon, street, from_street, to_street)
         WHERE c.speed IS NOT NULL AND c.speed <= {MAX_PLAUSIBLE_SPEED}
+        """
+    )
+
+    # The stuck-detector test has to run per *lane*, not per site. The raw file
+    # is one row per lane, and a healthy lane hides a dead one when they are
+    # averaged together: Barradas (Av Italia -> Rambla) reports two lanes, but
+    # lane 1 logged 3,168 zeros and never a single moving vehicle all month.
+    # Judged at site level the site looks fine, because lane 2 is fine.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE lane_health AS
+        SELECT
+            site_id, detector_id, lane,
+            count(*) FILTER (speed > 0)          AS n_moving,
+            avg(speed) FILTER (speed > 0)        AS mean_speed,
+            -- Same threshold as the site-level rule, applied where the data
+            -- actually lives: never saw movement, or never averaged walking pace.
+            (count(*) FILTER (speed > 0) = 0
+             OR avg(speed) FILTER (speed > 0) < {FLATLINE_SPEED}) AS is_dead
+        FROM valid_all
+        GROUP BY site_id, detector_id, lane
+        """
+    )
+
+    n_dead_lanes, n_lanes_total, dead_zeros, dead_moving = con.execute(
+        """
+        SELECT count(*) FILTER (is_dead), count(*),
+               (SELECT count(*) FROM valid_all v JOIN lane_health l
+                  USING (site_id, detector_id, lane)
+                WHERE l.is_dead AND v.speed = 0),
+               (SELECT count(*) FROM valid_all v JOIN lane_health l
+                  USING (site_id, detector_id, lane)
+                WHERE l.is_dead AND v.speed > 0)
+        FROM lane_health
+        """
+    ).fetchone()
+    print(
+        f"  {n_dead_lanes} of {n_lanes_total} lane detectors never measured moving "
+        f"traffic (or never averaged {FLATLINE_SPEED:g} km/h) -- dropping their "
+        f"{dead_zeros:,} zero and {dead_moving:,} moving readings",
+        flush=True,
+    )
+
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE valid AS
+        SELECT v.*
+        FROM valid_all v
+        JOIN lane_health l USING (site_id, detector_id, lane)
+        WHERE NOT l.is_dead
         """
     )
 
@@ -196,7 +247,7 @@ def build(csv_path: Path, con: duckdb.DuckDBPyConnection | None = None) -> None:
             any_value(s.to_street)                             AS to_street,
             count(DISTINCT v.detector_id)                      AS n_detectors,
             count(DISTINCT v.lane)                             AS n_lanes,
-            count(*)                                           AS n_readings,
+            count(v.speed)                                     AS n_readings,
             count(*) FILTER (v.speed = 0)                      AS n_zero,
             avg(v.speed) FILTER (v.speed > 0)                  AS mean_speed,
             quantile_cont(v.speed, {FREE_FLOW_PERCENTILE})
@@ -204,11 +255,26 @@ def build(csv_path: Path, con: duckdb.DuckDBPyConnection | None = None) -> None:
             any_value(m.n_missing)                             AS n_missing,
             any_value(cs.streets_at_coord)                     AS streets_at_coord,
             any_value(dn.day_speed)                            AS day_speed,
-            any_value(dn.night_speed)                          AS night_speed
+            any_value(dn.night_speed)                          AS night_speed,
+            any_value(dl.n_dead_lanes)                          AS n_dead_lanes
+        -- The inventory is sites that produced at least one usable reading
+        -- (`valid_all`, before the dead-lane filter). Sites whose every reading
+        -- was empty or implausible are genuinely absent from the data and are not
+        -- counted as measuring points.
+        --
+        -- Then LEFT JOIN the *filtered* readings, so a site whose every lane is
+        -- dead still appears here with a null mean_speed. data.py flags it via
+        -- is_live, which keeps the "excluded as stuck" count reportable instead
+        -- of the site silently vanishing from the totals.
         FROM sites s
-        JOIN valid v USING (site_id)
+        JOIN (SELECT DISTINCT site_id FROM valid_all) reported USING (site_id)
+        LEFT JOIN valid v USING (site_id)
         JOIN coord_streets cs ON cs.lat = s.lat AND cs.lon = s.lon
         LEFT JOIN day_night dn USING (site_id)
+        LEFT JOIN (
+            SELECT site_id, count(*) FILTER (is_dead) AS n_dead_lanes
+            FROM lane_health GROUP BY site_id
+        ) dl USING (site_id)
         JOIN (
             SELECT s2.site_id, count(*) FILTER (c.speed IS NULL) AS n_missing
             FROM clean c
