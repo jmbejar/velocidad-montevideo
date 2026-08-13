@@ -88,14 +88,20 @@ SURFACE_STEP_KM = 0.2       # 10,200 cells over the sensor bbox, ~45 ms to build
 SURFACE_BANDWIDTH_KM = 0.5  # 38% of cells end up supported; the rest is empty
 SURFACE_CUTOFF_KM = 1.2     # beyond this we assert nothing at all
 
-# Support (the sum of kernel weights) spans 0.02 to 52 on real slices, median
-# 0.61 -- so opacity has to be sublinear or almost every cell renders invisible.
-# A median cell lands near 0.53, a well-supported one hits the ceiling, an
-# isolated one sits at the floor: visible, but visibly provisional.
+# Support (the sum of kernel weights, roughly a proximity-weighted sensor count)
+# spans 0.02 to 52 on real slices, so opacity has to be sublinear or almost
+# every cell renders invisible.
+#
+# The reference matters more than it looks. At 2.0 everything from three sensors
+# up saturated, and a lone sensor still drew at 0.64 -- 75% as opaque as a cell
+# backed by fifty, which is visually indistinguishable. The confidence channel
+# was therefore saying nothing, and a single working lane detector in Carrasco
+# painted 600 m of crimson that read as authoritative. At 8.0 the spread lands
+# where the sensors actually are: 1 sensor -> 0.20, 3 -> 0.43, 10+ -> full.
 SURFACE_ALPHA_MAX = 0.85
 SURFACE_ALPHA_MIN = 0.10
-SURFACE_ALPHA_REF = 2.0     # support at which a cell is considered well-backed
-SURFACE_ALPHA_GAMMA = 0.4
+SURFACE_ALPHA_REF = 8.0     # support at which a cell counts as well-backed
+SURFACE_ALPHA_GAMMA = 0.7
 
 # Local equirectangular conversion, good enough across a single city.
 KM_PER_DEG_LAT = 111.0
