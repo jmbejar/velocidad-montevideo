@@ -21,6 +21,10 @@ Deliberately free of colour and Streamlit so it can be checked on its own.
 
 from __future__ import annotations
 
+import base64
+import io
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
@@ -37,6 +41,29 @@ def _km_per_deg_lon(lat: float = CITY_LAT) -> float:
     return KM_PER_DEG_LAT * float(np.cos(np.radians(lat)))
 
 
+@dataclass(frozen=True)
+class Surface:
+    """The estimated field as a raster, ready to be tinted and drawn.
+
+    `values` and `support` are (ny, nx) with row 0 at the *south* edge. `values`
+    is NaN wherever no sensor lies inside the cutoff. `bounds` is the outer edge
+    of the grid as (west, south, east, north) degrees -- the outer edge, not the
+    centres of the corner cells, so it can be handed straight to a BitmapLayer.
+    """
+
+    values: np.ndarray
+    support: np.ndarray
+    bounds: tuple[float, float, float, float]
+
+    @property
+    def n_supported(self) -> int:
+        return int(np.isfinite(self.values).sum())
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.values.shape
+
+
 def kernel_surface(
     frame: pd.DataFrame,
     column: str,
@@ -44,18 +71,14 @@ def kernel_surface(
     step_km: float = SURFACE_STEP_KM,
     bandwidth_km: float = SURFACE_BANDWIDTH_KM,
     cutoff_km: float = SURFACE_CUTOFF_KM,
-) -> pd.DataFrame:
-    """Kernel-weighted surface over the sensors in `frame`.
-
-    Returns one row per supported cell with `lon`/`lat` at the cell's
-    **south-west corner**, which is the anchor deck.gl's GridCellLayer expects --
-    getting this wrong offsets the whole surface by half a cell against the dots.
-    """
-    values = pd.to_numeric(frame[column], errors="coerce")
-    usable = frame.loc[values.notna()]
-    values = values[values.notna()].to_numpy(dtype=float)
+) -> Surface:
+    """Kernel-weighted surface over the sensors in `frame`, as a raster."""
+    numeric = pd.to_numeric(frame[column], errors="coerce")
+    usable = frame.loc[numeric.notna()]
+    values = numeric[numeric.notna()].to_numpy(dtype=float)
+    empty = Surface(np.zeros((0, 0)), np.zeros((0, 0)), (0.0, 0.0, 0.0, 0.0))
     if usable.empty:
-        return pd.DataFrame(columns=["lon", "lat", "value", "support"])
+        return empty
 
     km_lon = _km_per_deg_lon()
     sx = usable["lon"].to_numpy(dtype=float) * km_lon
@@ -76,21 +99,46 @@ def kernel_surface(
     support = weights.sum(axis=1)
     supported = support > 0
     if not supported.any():
-        return pd.DataFrame(columns=["lon", "lat", "value", "support"])
+        return empty
 
-    weights = weights[supported]
-    support = support[supported]
-    estimate = (weights * values[None, :]).sum(axis=1) / support
-
-    half = step_km / 2.0
-    return pd.DataFrame(
-        {
-            "lon": (cx[supported] - half) / km_lon,
-            "lat": (cy[supported] - half) / KM_PER_DEG_LAT,
-            "value": estimate,
-            "support": support,
-        }
+    estimate = np.full(support.shape, np.nan)
+    np.divide(
+        (weights * values[None, :]).sum(axis=1), support,
+        out=estimate, where=supported,
     )
+
+    ny, nx = grid_x.shape
+    half = step_km / 2.0
+    return Surface(
+        values=estimate.reshape(ny, nx),
+        support=support.reshape(ny, nx),
+        # Plain floats, not numpy scalars, so pydeck serialises them cleanly.
+        bounds=(
+            float((xs[0] - half) / km_lon),
+            float((ys[0] - half) / KM_PER_DEG_LAT),
+            float((xs[-1] + half) / km_lon),
+            float((ys[-1] + half) / KM_PER_DEG_LAT),
+        ),
+    )
+
+
+def to_png_data_uri(rgba: np.ndarray) -> str:
+    """Encode an (ny, nx, 4) uint8 raster as a data URI for a BitmapLayer.
+
+    Row 0 of `rgba` is treated as the *south* edge and flipped, since image rows
+    run north-to-south. Drawing the field as one texture rather than thousands of
+    cells is what makes it read as a smooth heatmap: the GPU interpolates between
+    cell centres, and the payload is a few KB instead of a row per cell.
+    """
+    from PIL import Image
+
+    flipped = np.ascontiguousarray(rgba[::-1])
+    buffer = io.BytesIO()
+    # No optimize=True: it costs ~2.7 s on this raster and saves a few KB on an
+    # image that is already ~11 KB.
+    Image.fromarray(flipped, mode="RGBA").save(buffer, format="PNG", compress_level=1)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 def support_alpha(

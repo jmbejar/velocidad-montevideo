@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
@@ -24,7 +25,6 @@ from mvdspeed.config import (
     SURFACE_CUTOFF_KM,
     SURFACE_DARK,
     SURFACE_LIGHT,
-    SURFACE_STEP_KM,
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -122,7 +122,7 @@ def sites_at(
 def surface_for(
     _key: tuple, dows: tuple[int, ...], buckets: tuple[int, ...], include_zeros: bool,
     min_samples: int, column: str, _metric_name: str,
-) -> pd.DataFrame:
+) -> surface.Surface:
     """The kernel surface for one slice. Cached so the ▶ Play loop stays smooth.
 
     Keyed on everything that changes the sensor values, but not on colour: the
@@ -380,40 +380,50 @@ frame["congestion_label"] = frame["congestion"].map(
 
 layers = []
 if layer_choice in ("Surface + sensors", "Surface only"):
-    cells = surface_for(
+    field = surface_for(
         CACHE_KEY, dows, buckets, include_zeros, min_samples, column, metric_name
     )
-    if not cells.empty:
+    if field.n_supported:
+        flat = pd.Series(field.values.ravel())
         # Coloured with the *same* function as the dots, so the two can never
-        # drift onto different scales, then faded by how well each cell is
-        # supported by nearby sensors.
+        # drift onto different scales. Unsupported cells still get a colour --
+        # the ramp's low end, since colors treats NaN as zero -- and are hidden
+        # with alpha instead, so bilinear filtering has no black to bleed in from.
         if metric["kind"] == "diverging":
-            rgb = colors.diverging(cells["value"], limit, dark=dark_map)
+            rgb = colors.diverging(flat, limit, dark=dark_map)
         else:
             rgb = colors.sequential(
-                cells["value"], vmin, vmax, invert=metric["invert"],
+                flat, vmin, vmax, invert=metric["invert"],
                 dark=dark_map, ramp=metric["ramp"],
             )
         alpha = surface.support_alpha(
-            cells["support"],
+            field.support.ravel(),
             alpha_min=SURFACE_ALPHA_MIN,
             alpha_max=SURFACE_ALPHA_MAX,
             reference=SURFACE_ALPHA_REF,
             gamma=SURFACE_ALPHA_GAMMA,
         )
         if layer_choice == "Surface only":
-            alpha = alpha * 1.1
-        cells = cells.assign(
-            color=[[*c, int(a * 255)] for c, a in zip(rgb, alpha)]
-        )
+            alpha = np.minimum(alpha * 1.15, 1.0)
+        alpha = np.where(np.isfinite(flat.to_numpy()), alpha, 0.0)
+
+        ny, nx = field.shape
+        raster = np.empty((ny * nx, 4), dtype=np.uint8)
+        raster[:, :3] = np.asarray(rgb, dtype=np.uint8)
+        raster[:, 3] = np.clip(alpha * 255, 0, 255).astype(np.uint8)
+
         layers.append(
             pdk.Layer(
-                "GridCellLayer",
-                data=cells,
-                get_position=["lon", "lat"],
-                cell_size=SURFACE_STEP_KM * 1000,
-                get_fill_color="color",
-                extruded=False,
+                "BitmapLayer",
+                # String() again, for the same reason as `aggregation` before it:
+                # a bare str is serialised as the accessor expression
+                # "@@=data:image/png;..." and deck.gl fails parsing it at the
+                # colon. pydeck does this to every plain string prop.
+                image=pdk.types.String(
+                    surface.to_png_data_uri(raster.reshape(ny, nx, 4))
+                ),
+                bounds=list(field.bounds),
+                opacity=1.0,
                 pickable=False,
             )
         )

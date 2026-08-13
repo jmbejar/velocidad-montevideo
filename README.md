@@ -188,9 +188,28 @@ support = Σw_i
 
 Density no longer changes `value` — it changes `support`, which becomes opacity
 (sublinear: support spans 0.02–52, so a linear map would leave all but the
-densest cells invisible). Cells with no sensor inside the cutoff are never
-emitted, so unmeasured ground stays bare instead of being interpolated across.
-About 10,200 cells build in ~45 ms and 38% of them end up supported.
+densest cells invisible; the reference and exponent matter, see
+`SURFACE_ALPHA_*`). Cells with no sensor inside the cutoff are fully transparent,
+so unmeasured ground stays bare instead of being interpolated across. About
+10,200 cells build in ~45 ms and 38% of them end up supported.
+
+**It still renders as a smooth heatmap**, because the grid is drawn as a single
+texture: the raster is tinted in numpy, PNG-encoded to a ~17 KB data URI (28 ms),
+and handed to a `BitmapLayer`, where the GPU interpolates between cell centres.
+Drawing it as thousands of `GridCellLayer` squares was the first attempt and read
+as visibly pixelated. Two notes for anyone touching this:
+
+- The image must be wrapped in `pdk.types.String(...)`. pydeck serialises plain
+  strings as accessor expressions, so a bare data URI arrives as
+  `"@@=data:image/png;..."` and deck.gl dies parsing it at the colon — the same
+  trap that silently broke `aggregation="MEAN"` earlier.
+- Image rows run north-to-south while the grid is built south-to-north, so the
+  raster is flipped on encode, and `bounds` is the grid's outer edge rather than
+  the corner cell centres. Getting either wrong offsets the surface against the
+  dots.
+
+Unsupported cells still get a colour (the ramp's low end) and are hidden with
+alpha alone, so bilinear filtering has no black to bleed in from at the edges.
 
 Two things fall out of this for free. Cell colours come from the **same**
 `colors.sequential()` / `colors.diverging()` the dots use, so the two layers
