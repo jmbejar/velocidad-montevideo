@@ -14,6 +14,8 @@ from mvdspeed.config import (
     MEASUREMENTS_PARQUET,
     MIN_FREE_FLOW_FOR_RATIO,
     MIN_SAMPLES,
+    STALLED_DAY_SPEED,
+    STALLED_NIGHT_RATIO,
 )
 
 BUCKETS_PER_DAY = 24 * 60 // BUCKET_MINUTES
@@ -45,11 +47,31 @@ class Dataset:
 
     @property
     def n_without_reference(self) -> int:
-        return int((self.sites["is_live"] & ~self.sites["has_reference"]).sum())
+        # Counted among usable sensors only, so the stalled ones are not
+        # reported twice under two different reasons.
+        return int((self.sites["is_usable"] & ~self.sites["has_reference"]).sum())
 
     @property
     def n_without_location(self) -> int:
-        return int((self.sites["is_live"] & ~self.sites["has_location"]).sum())
+        return int((self.sites["is_usable"] & ~self.sites["has_location"]).sum())
+
+    @property
+    def n_stalled(self) -> int:
+        return int(self.sites["is_stalled"].sum())
+
+    @property
+    def usable_site_ids(self) -> pd.Series:
+        return self.sites.loc[self.sites["is_usable"], "site_id"]
+
+    def _usable(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Drop readings from sensors that are stuck or not watching traffic.
+
+        Applies to the non-spatial views too: a detector pinned at 1.5 km/h all
+        month would otherwise drag the city-wide curve down. Sensors that are
+        merely *unlocatable* stay in -- their readings are sound, only their
+        coordinates are missing.
+        """
+        return frame[frame["site_id"].isin(set(self.usable_site_ids))]
 
 
 def load() -> Dataset:
@@ -81,6 +103,19 @@ def load() -> Dataset:
     sites["has_reference"] = sites["free_flow_speed"].notna() & (
         sites["free_flow_speed"] >= MIN_FREE_FLOW_FOR_RATIO
     )
+    # Pinned at walking pace all day yet free-flowing at 3am: not watching
+    # through traffic. See STALLED_* in config for the evidence.
+    day, night = sites["day_speed"], sites["night_speed"]
+    sites["is_stalled"] = (
+        day.notna()
+        & night.notna()
+        & (day < STALLED_DAY_SPEED)
+        & (night > day * STALLED_NIGHT_RATIO)
+    )
+
+    # Everything a speed average should be built from.
+    sites["is_usable"] = sites["is_live"] & ~sites["is_stalled"]
+
     # The feed's placeholder coordinate: real measurements, but we do not know
     # where they were taken, so they cannot be mapped or ranked as a place.
     sites["has_location"] = sites["streets_at_coord"] <= MAX_STREETS_PER_COORD
@@ -107,14 +142,15 @@ def by_site(
     buckets: list[int],
     include_zeros: bool = False,
     min_samples: int = MIN_SAMPLES,
-    only_live: bool = True,
+    only_usable: bool = True,
     located_only: bool = True,
 ) -> pd.DataFrame:
     """One row per measuring site for the selected days and times of day.
 
-    This is the spatial view, so by default it drops sensors that are stuck or
-    that carry the feed's placeholder coordinate. Their readings still count in
-    `city_profile` and `street_profile`, which do not depend on position.
+    This is the spatial view, so on top of the untrustworthy sensors that every
+    view drops, it also drops the ones carrying the feed's placeholder
+    coordinate -- those keep their readings in `city_profile` and
+    `street_profile`, which do not depend on position.
     """
     frame = data.measurements
     frame = frame[frame["dow"].isin(dows) & frame["bucket"].isin(buckets)]
@@ -133,8 +169,8 @@ def by_site(
     grouped["speed"] = grouped["speed_sum"] / grouped["samples"]
 
     merged = grouped.merge(data.sites, on="site_id", how="inner", validate="one_to_one")
-    if only_live:
-        merged = merged[merged["is_live"]]
+    if only_usable:
+        merged = merged[merged["is_usable"]]
     if located_only:
         merged = merged[merged["has_location"]]
 
@@ -156,7 +192,7 @@ def city_profile(
     data: Dataset, *, dows: list[int], include_zeros: bool = False
 ) -> pd.DataFrame:
     """City-wide mean speed for each time-of-day bucket."""
-    frame = data.measurements
+    frame = data._usable(data.measurements)
     frame = _weighted(frame[frame["dow"].isin(dows)], include_zeros)
     profile = frame.groupby("bucket", as_index=False).agg(
         speed_sum=("speed_sum", "sum"),
@@ -173,7 +209,7 @@ def street_profile(
 ) -> pd.DataFrame:
     """Mean speed per time bucket for a handful of named streets."""
     site_ids = data.sites.loc[data.sites["street"].isin(streets), ["site_id", "street"]]
-    frame = data.measurements.merge(site_ids, on="site_id", how="inner")
+    frame = data._usable(data.measurements).merge(site_ids, on="site_id", how="inner")
     frame = _weighted(frame[frame["dow"].isin(dows)], include_zeros)
     profile = frame.groupby(["street", "bucket"], as_index=False).agg(
         speed_sum=("speed_sum", "sum"),

@@ -47,6 +47,21 @@ MIN_FREE_FLOW_FOR_RATIO = 10
 # Excluded from the map and rankings by default, and counted in the UI.
 FLATLINE_SPEED = 3.0
 
+# A detector can read plausibly overnight and still be useless by day. Seven of
+# them sit pinned at walking pace for fifteen hours straight and then report
+# 15-28 km/h at 3am, while their free-flow reference lands at a third of what
+# neighbouring sensors on the same avenue see (12-14 km/h against a median of 45
+# along Av Italia). Real congestion clears by late evening; theirs never does,
+# so they are not measuring through traffic -- most likely a turn lane, a bus
+# bay or a queue that is permanently occupied.
+#
+# Measured on weekdays only: the day/night contrast is defined by the commute,
+# and weekend mornings dilute the daytime window enough to hide one of them.
+STALLED_DAY_HOURS = (7, 22)
+STALLED_NIGHT_HOURS = (2, 6)
+STALLED_DAY_SPEED = 3.0
+STALLED_NIGHT_RATIO = 3.0
+
 # The feed falls back to a single placeholder coordinate when it has no real
 # one, which lands a pile of unrelated sensors on one spot in the bay. Rather
 # than hardcode that coordinate (next month's file may use another), detect it

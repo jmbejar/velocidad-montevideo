@@ -35,13 +35,13 @@ Weekdays across 1–11 August 2026, at 442 measuring points:
 
 | | |
 |---|---|
-| Free-flow peak | **42.6 km/h** at 02:30 |
-| Worst half hour | **20.7 km/h** at 17:30 |
-| Morning drop | 30.7 → 24.6 km/h between 07:00 and 07:30 |
-| Evening recovery | 22.1 → 27.1 km/h between 18:00 and 18:30 |
+| Free-flow peak | **42.8 km/h** at 02:30 |
+| Worst half hour | **20.8 km/h** at 17:30 |
+| Morning drop | 31.0 → 24.8 km/h between 07:00 and 07:30 |
+| Evening recovery | 22.3 → 27.4 km/h between 18:00 and 18:30 |
 
 The evening peak bites harder than the morning one, and midday never recovers to
-overnight speeds — the city sits on a ~23 km/h plateau from 08:00 to 16:00.
+overnight speeds — the city sits on a ~23.7 km/h plateau from 08:00 to 16:00.
 
 ## Reading the data honestly
 
@@ -61,7 +61,7 @@ Averaging them in would drag every quiet street and every night hour toward
 zero, so they are excluded by default and reported separately as the "Zero
 readings" figure. The sidebar has a toggle if you want the other convention.
 
-Three further sensor-quality rules, all in `config.py`:
+Four further sensor-quality rules, all in `config.py`:
 
 - **13 sensors share one placeholder coordinate.** The feed falls back to
   `(-34.890561, -56.220631)` — a point out in the bay — when it has no real
@@ -77,13 +77,24 @@ Three further sensor-quality rules, all in `config.py`:
 
 - **16 sensors never recorded moving traffic** in the whole month (one reports
   ~1.6 km/h across 5,930 readings). They are treated as stuck and excluded.
+
+- **7 sensors are not watching through traffic.** They sit pinned under 3 km/h
+  for the fifteen hours from 07:00 to 22:00, then report 9–26 km/h at 3am. Real
+  congestion clears by late evening; theirs never does. Their free-flow
+  references corroborate it: 12–14 km/h where the other twenty sensors along
+  Av Italia see a median of 45. Most are probably turn lanes, bus bays or
+  permanently occupied queues — real places, but not the road they are named
+  after. Detected as `day_speed < 3 km/h AND night_speed > 3 × day_speed`,
+  measured on weekdays, since weekend mornings dilute the daytime window enough
+  to hide one of the seven. Excluded from every view, including the city curve —
+  a detector stuck at 1.9 km/h all month would otherwise drag it down.
 - **Congestion is a ratio**, so it is left undefined rather than faked for the 7
   sensors whose free-flow reference is under 10 km/h — at that scale the ±0.5
   km/h rounding is already worth 5%. This is what stopped a sensor crawling at
   1 km/h from being drawn as "0% congested".
 
-Of 442 sites, **410 are mappable** at a typical rush-hour slice once the stuck
-and unlocatable sensors are set aside.
+Of 442 sites, **404 are mappable** at a typical rush-hour slice once the stuck,
+stalled and unlocatable sensors are set aside.
 
 Street names in the source are inconsistent (`Bv Artigas` vs `Bv. Artgias`,
 `Bv Espana` vs `Bv. España`, trailing spaces). The ETL trims whitespace but does
@@ -154,6 +165,14 @@ sensors, and both had to be overridden:
   near-stopped sensors saturates the scale and squashes the rest of the city
   into the bottom step. It is pinned to the 10th–92nd percentile of the current
   slice, so one outlier cannot reclaim the ramp.
+
+`MEAN` fixes `SUM`'s density bias but has one of its own, worth knowing when
+reading the map: **the same value draws darker where sensors are sparse.** The
+east of the city has a median of 3 sensors within 1 km against 30 in the centre,
+so an eastern cell renders one sensor's value undiluted with a hard edge, while a
+central cell averages ~30 and regresses toward the city mean. Carrasco looks
+worse than it is for this reason — its median congestion is 0.54 against 0.52 for
+the rest of the city. The dots are the authoritative read.
 
 ## Caveats
 

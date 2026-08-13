@@ -24,6 +24,8 @@ from mvdspeed.config import (
     MAX_PLAUSIBLE_SPEED,
     MAX_STREETS_PER_COORD,
     MEASUREMENTS_PARQUET,
+    STALLED_DAY_HOURS,
+    STALLED_NIGHT_HOURS,
 )
 
 # The published column docs say `id_detector` / `velocidad_promedio`, the actual
@@ -141,6 +143,28 @@ def build(csv_path: Path, con: duckdb.DuckDBPyConnection | None = None) -> None:
         """
     )
 
+    # Daytime vs overnight speed per sensor, weekdays only: the contrast that
+    # exposes a detector which is not watching through traffic at all.
+    # See STALLED_* in config.
+    day_lo, day_hi = (h * 60 // BUCKET_MINUTES for h in STALLED_DAY_HOURS)
+    night_lo, night_hi = (h * 60 // BUCKET_MINUTES for h in STALLED_NIGHT_HOURS)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE day_night AS
+        SELECT
+            site_id,
+            avg(speed) FILTER (
+                speed > 0 AND bucket >= {day_lo} AND bucket < {day_hi}
+            ) AS day_speed,
+            avg(speed) FILTER (
+                speed > 0 AND bucket >= {night_lo} AND bucket < {night_hi}
+            ) AS night_speed
+        FROM valid
+        WHERE dayofweek(date) BETWEEN 1 AND 5
+        GROUP BY site_id
+        """
+    )
+
     # Sums + counts, not averages: any later regrouping stays exact.
     con.execute(
         """
@@ -178,10 +202,13 @@ def build(csv_path: Path, con: duckdb.DuckDBPyConnection | None = None) -> None:
             quantile_cont(v.speed, {FREE_FLOW_PERCENTILE})
                 FILTER (v.speed > 0)                           AS free_flow_speed,
             any_value(m.n_missing)                             AS n_missing,
-            any_value(cs.streets_at_coord)                     AS streets_at_coord
+            any_value(cs.streets_at_coord)                     AS streets_at_coord,
+            any_value(dn.day_speed)                            AS day_speed,
+            any_value(dn.night_speed)                          AS night_speed
         FROM sites s
         JOIN valid v USING (site_id)
         JOIN coord_streets cs ON cs.lat = s.lat AND cs.lon = s.lon
+        LEFT JOIN day_night dn USING (site_id)
         JOIN (
             SELECT s2.site_id, count(*) FILTER (c.speed IS NULL) AS n_missing
             FROM clean c

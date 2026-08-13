@@ -295,6 +295,11 @@ if dataset.n_flatlined:
         f"{dataset.n_flatlined} sensor(s) never recorded moving traffic all month "
         "and are excluded as stuck"
     )
+if dataset.n_stalled:
+    notes.append(
+        f"{dataset.n_stalled} sit pinned under 3 km/h for fifteen hours a day yet "
+        "run freely at 3am — excluded as not watching through traffic"
+    )
 if dataset.n_without_location:
     notes.append(
         f"{dataset.n_without_location} share the feed's placeholder coordinate "
