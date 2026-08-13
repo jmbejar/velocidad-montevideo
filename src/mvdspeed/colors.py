@@ -72,18 +72,6 @@ def _interpolate(ramp: np.ndarray, t: np.ndarray) -> np.ndarray:
     return ramp[low] * (1 - frac) + ramp[high] * frac
 
 
-def heatmap_rgba(dark: bool, ramp: str = "heat") -> list[list[int]]:
-    """The RGBA stops deck.gl's HeatmapLayer expects, sampled off the ramp.
-
-    Alpha climbs alongside the colour so the low end fades into the basemap
-    rather than laying a flat film over the whole city. Nine stops rather than
-    the usual six, because separating the middle of the range is the point.
-    """
-    stops = _interpolate(_SEQ[(ramp, dark)], np.linspace(0, 1, 9))
-    alphas = (40, 80, 120, 155, 185, 210, 230, 245, 255)
-    return [[int(r), int(g), int(b), a] for (r, g, b), a in zip(stops, alphas)]
-
-
 def sequential(
     values: pd.Series, vmin: float, vmax: float, *, invert: bool = False,
     dark: bool = False, ramp: str = "heat",

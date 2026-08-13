@@ -24,7 +24,8 @@ seconds. Re-run it when a new month's file is published.
   day is unusual for that specific spot), or *Reading volume* as a coverage
   sanity check.
 - **A time-of-day slider** over 30-minute buckets, with a ▶ Play button that
-  animates the full day, and an all-day-average toggle.
+  animates the full day, and an all-day-average toggle. Colours are on a fixed
+  scale, so hours are comparable as it runs.
 - **Day scope**: weekdays, weekend, or every day.
 - **The city's daily curve**, with the selected half hour marked.
 - **Rankings and street comparison**, plus a CSV export of the current slice.
@@ -116,9 +117,10 @@ traffic-engineering proxy — robust to both jams and the occasional speeder.
 
 ```
 src/mvdspeed/
-  config.py   paths, cleaning thresholds, palette
+  config.py   paths, cleaning thresholds, surface parameters, palette
   etl.py      CSV -> parquet (duckdb)
   data.py     loading and slicing
+  surface.py  kernel-weighted heat surface over the point sensors
   colors.py   value -> colour scales and legends
   app.py      the Streamlit dashboard
 ```
@@ -152,40 +154,51 @@ on colour alone.
 
 ### Why the heat cloud needed more than colour
 
-Two deck.gl defaults conspire to flatten a `HeatmapLayer` built on point
-sensors, and both had to be overridden:
+deck.gl's `HeatmapLayer` estimates point **density** — "where are there many
+events". That is the wrong statistical object for an attribute measured at fixed
+stations, and no amount of colour tuning fixes it. It bins points and averages
+within each bin, so **intensity depended on how many neighbours a sensor happened
+to have.** The east of the city has a median of 3 sensors within 1 km against 30
+in the centre, so a lone eastern sensor rendered undiluted with a hard edge while
+a clustered central one was averaged toward the local mean. Carrasco read as dark
+blobs on a median congestion of 0.54, against 0.52 for the rest of the city.
 
-- **`aggregation` defaults to `SUM`**, so three ordinary sensors on one corner
-  outrank one badly jammed sensor on its own — the cloud ends up mapping sensor
-  density rather than congestion. It is set to `MEAN`. Note that pydeck
-  serialises a bare Python string as the accessor expression `"@@=MEAN"`, which
-  deck.gl evaluates to `undefined` before silently falling back to `SUM`;
-  `pdk.types.String("MEAN")` is required to pass it as a literal.
-- **`colorDomain` defaults to the hottest cell in the current slice**, which is
-  wrong twice over. The cloud disagrees with the dot drawn on top of it, and the
-  scale silently rescales every time the slider moves — so 03:00, where the city
-  averages 42 km/h and the median sensor is at *zero* congestion, came out as red
-  as 18:00, and the Play animation could not show the rush hour building. It is
-  pinned to the metric's own fixed domain, the same one the dots use, so one
-  colour means one value at every hour. (An earlier version used per-slice
-  percentiles to stretch the mid-range; that was compensating for the `SUM` bug
-  above, and became actively misleading once `MEAN` fixed it.)
+So the surface is computed here instead (`surface.py`), with one expression
+applied identically at every point:
 
-`MEAN` fixes `SUM`'s density bias but has one of its own, worth knowing when
-reading the map: **the same value draws darker where sensors are sparse.** The
-east of the city has a median of 3 sensors within 1 km against 30 in the centre,
-so an eastern cell renders one sensor's value undiluted with a hard edge, while a
-central cell averages ~30 and regresses toward the city mean. Carrasco looks
-worse than it is for this reason — its median congestion is 0.54 against 0.52 for
-the rest of the city. The dots are the authoritative read.
+```
+w_i     = exp(-(d_i / 500 m)^2),  zero beyond 1.2 km
+value   = Σ(w_i · v_i) / Σw_i
+support = Σw_i
+```
+
+Density no longer changes `value` — it changes `support`, which becomes opacity
+(sublinear: support spans 0.02–52, so a linear map would leave all but the
+densest cells invisible). Cells with no sensor inside the cutoff are never
+emitted, so unmeasured ground stays bare instead of being interpolated across.
+About 10,200 cells build in ~45 ms and 38% of them end up supported.
+
+Two things fall out of this for free. Cell colours come from the **same**
+`colors.sequential()` / `colors.diverging()` the dots use, so the two layers
+cannot drift onto different scales — a bug that had to be fixed twice while the
+`HeatmapLayer` maintained its own `colorDomain`. And `vs. its own typical` can
+now be drawn as a surface: a cell holding a mean *signed* deviation is
+meaningful, where a density cloud could not carry a sign at all.
 
 ## Caveats
 
 - 11 days of one winter month is not a seasonal baseline.
 - Sensors sit at intersections on monitored corridors, so coverage is not
   uniform across the city — absence of dots is not absence of congestion.
-- The heat cloud smooths 442 point sensors and interpolates between them, so it
-  reads as coverage over areas that have no sensor at all. The dots carry the
-  real measurements.
+- The surface is an average, so it softens the extremes: cell values span
+  0.25–0.68 (p5–p95) where raw sensors span 0.09–0.93. The dots carry the real
+  measurements.
+- It bleeds over water near the Rambla — a coastal sensor supports cells up to
+  1.2 km offshore and there is no coastline polygon here to mask against.
+- Painting an area still implies areal support for what is really a *linear*
+  measurement: a sensor measures one stretch of one road, not the neighbourhood
+  around it. Colouring the road segments themselves is the only real fix, and it
+  needs OSM geometry plus fuzzy matching against street names that include
+  `Bv. Artgias`.
 - The basemap tiles come from CARTO's CDN, so the map needs network access
   (no API key required).

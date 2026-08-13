@@ -12,13 +12,19 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
-from mvdspeed import colors, data as mvd
+from mvdspeed import colors, data as mvd, surface
 from mvdspeed.config import (
     BUCKET_MINUTES,
     GRIDLINE,
     MAX_PLAUSIBLE_SPEED,
+    SURFACE_ALPHA_GAMMA,
+    SURFACE_ALPHA_MAX,
+    SURFACE_ALPHA_MIN,
+    SURFACE_ALPHA_REF,
+    SURFACE_CUTOFF_KM,
     SURFACE_DARK,
     SURFACE_LIGHT,
+    SURFACE_STEP_KM,
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -46,7 +52,6 @@ METRICS = {
         "legend": "Congestion — share of this sensor's own free-flow speed lost",
         "format": lambda v: f"{v:.0%}",
         "tick_format": lambda v: f"{v:.0%}",
-        "heatmap": True,
         "help": (
             "How far below its own free-flow speed (85th percentile) a sensor is "
             "right now. Comparable between a 30 km/h side street and a 60 km/h "
@@ -62,7 +67,6 @@ METRICS = {
         "legend": "Average speed (km/h) — hotter is slower",
         "format": lambda v: f"{v:.1f} km/h",
         "tick_format": lambda v: f"{v:.0f}",
-        "heatmap": True,
         "help": "Mean of the reported 5-minute averages, weighted by reading count.",
     },
     "vs. its own typical": {
@@ -74,10 +78,10 @@ METRICS = {
         "legend": "Difference from this sensor's all-hours average (km/h)",
         "format": lambda v: f"{v:+.1f} km/h",
         "tick_format": lambda v: f"{v:+.0f}",
-        "heatmap": False,  # a heat cloud cannot carry a +/- sign
         "help": (
             "Where the selected time of day is unusual *for that spot*. Red is "
-            "slower than that sensor's own average, blue faster."
+            "slower than that sensor's own average, blue faster. The surface "
+            "averages the signed differences, so it carries the sign too."
         ),
     },
     "Reading volume": {
@@ -90,7 +94,6 @@ METRICS = {
         "legend": "Number of 5-minute readings behind the average",
         "format": lambda v: f"{v:,.0f}",
         "tick_format": lambda v: f"{v:,.0f}",
-        "heatmap": True,
         "help": "A sanity layer: which sensors actually reported at this time of day.",
     },
 }
@@ -112,6 +115,21 @@ def sites_at(
         buckets=list(buckets),
         include_zeros=include_zeros,
         min_samples=min_samples,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def surface_for(
+    _key: tuple, dows: tuple[int, ...], buckets: tuple[int, ...], include_zeros: bool,
+    min_samples: int, column: str, _metric_name: str,
+) -> pd.DataFrame:
+    """The kernel surface for one slice. Cached so the ▶ Play loop stays smooth.
+
+    Keyed on everything that changes the sensor values, but not on colour: the
+    ramp is applied afterwards, so switching light/dark reuses the same grid.
+    """
+    return surface.kernel_surface(
+        sites_at(_key, dows, buckets, include_zeros, min_samples), column
     )
 
 
@@ -149,16 +167,13 @@ with st.sidebar:
 
     layer_choice = st.radio(
         "Map layer",
-        ["Heatmap + sensors", "Heatmap only", "Sensors only"],
+        ["Surface + sensors", "Surface only", "Sensors only"],
         index=0,
         help=(
-            "Sensors are single points; the heat cloud interpolates between them. "
-            "The dots are the actual measurements."
+            "The surface is a distance-weighted estimate between sensors, faded "
+            "where few sensors support it. The dots are the actual measurements."
         ),
     )
-    if not metric["heatmap"] and layer_choice != "Sensors only":
-        st.info(f"“{metric_name}” is signed, so it is shown as sensors only.")
-        layer_choice = "Sensors only"
 
     st.subheader("Days")
     scope_name = st.radio("Day scope", list(mvd.DAY_SCOPES), index=0)
@@ -197,7 +212,7 @@ with st.sidebar:
 # The page itself is always the light theme (see .streamlit/config.toml), so the
 # text and chart tokens are fixed. Only the map swaps surface, and with it the
 # ramp its marks are drawn from.
-surface = SURFACE_LIGHT
+chart_surface = SURFACE_LIGHT
 ink = TEXT_PRIMARY
 ink_secondary = TEXT_SECONDARY
 map_surface = SURFACE_DARK if dark_map else SURFACE_LIGHT
@@ -347,22 +362,6 @@ else:
         ramp=metric["ramp"],
     )
 
-# Heat weight must grow with the thing being shown, whichever direction the
-# metric's colour ramp runs.
-weight = frame[column].astype(float)
-if metric["invert"]:
-    weight = vmax - weight.clip(vmin, vmax)
-frame["weight"] = weight.clip(lower=0).fillna(0)
-
-# The cloud gets the *same absolute domain as the dots*, expressed in weight
-# space. Left to itself deck.gl normalises against the hottest cell in the
-# current slice, which is wrong twice over: the cloud disagrees with the dot
-# drawn on top of it, and the scale silently rescales every time the slider
-# moves -- so 03:00, where nothing is congested, comes out as red as 18:00 and
-# the animation cannot show the rush hour building. A fixed domain means one
-# colour means one value, at every hour.
-heat_lo, heat_hi = (0.0, vmax - vmin) if metric["invert"] else (vmin, vmax)
-
 def label(value, formatter) -> str:
     return "no data" if pd.isna(value) else formatter(value)
 
@@ -374,29 +373,45 @@ frame["congestion_label"] = frame["congestion"].map(
 )
 
 layers = []
-if layer_choice in ("Heatmap + sensors", "Heatmap only"):
-    layers.append(
-        pdk.Layer(
-            "HeatmapLayer",
-            data=frame,
-            get_position=["lon", "lat"],
-            get_weight="weight",
-            radius_pixels=70,
-            # MEAN, not the default SUM: the question is "how slow is traffic
-            # around here", not "how many slow sensors are stacked up here".
-            # Under SUM, three ordinary sensors on one corner outrank one badly
-            # jammed sensor on its own.
-            # String() is required -- a bare str is serialised as the accessor
-            # expression "@@=MEAN", which deck.gl evaluates to undefined and
-            # silently falls back to SUM.
-            aggregation=pdk.types.String("MEAN"),
-            color_domain=[heat_lo, heat_hi],
-            color_range=colors.heatmap_rgba(dark_map, metric["ramp"]),
-            opacity=0.75 if layer_choice == "Heatmap + sensors" else 0.9,
-            pickable=False,
-        )
+if layer_choice in ("Surface + sensors", "Surface only"):
+    cells = surface_for(
+        CACHE_KEY, dows, buckets, include_zeros, min_samples, column, metric_name
     )
-if layer_choice in ("Heatmap + sensors", "Sensors only"):
+    if not cells.empty:
+        # Coloured with the *same* function as the dots, so the two can never
+        # drift onto different scales, then faded by how well each cell is
+        # supported by nearby sensors.
+        if metric["kind"] == "diverging":
+            rgb = colors.diverging(cells["value"], limit, dark=dark_map)
+        else:
+            rgb = colors.sequential(
+                cells["value"], vmin, vmax, invert=metric["invert"],
+                dark=dark_map, ramp=metric["ramp"],
+            )
+        alpha = surface.support_alpha(
+            cells["support"],
+            alpha_min=SURFACE_ALPHA_MIN,
+            alpha_max=SURFACE_ALPHA_MAX,
+            reference=SURFACE_ALPHA_REF,
+            gamma=SURFACE_ALPHA_GAMMA,
+        )
+        if layer_choice == "Surface only":
+            alpha = alpha * 1.1
+        cells = cells.assign(
+            color=[[*c, int(a * 255)] for c, a in zip(rgb, alpha)]
+        )
+        layers.append(
+            pdk.Layer(
+                "GridCellLayer",
+                data=cells,
+                get_position=["lon", "lat"],
+                cell_size=SURFACE_STEP_KM * 1000,
+                get_fill_color="color",
+                extruded=False,
+                pickable=False,
+            )
+        )
+if layer_choice in ("Surface + sensors", "Sensors only"):
     layers.append(
         pdk.Layer(
             "ScatterplotLayer",
@@ -451,11 +466,12 @@ st.pydeck_chart(
 st.markdown(legend, unsafe_allow_html=True)
 if layer_choice != "Sensors only":
     st.caption(
-        "The cloud is the *average* reading around each spot, on the same fixed "
-        "scale as the dots and as every other time of day — so colours are "
-        "comparable as you move the slider. It interpolates between sensors, and "
-        "draws a lone sensor more strongly than one of thirty in a cluster; read "
-        "the dots for actual measurements."
+        "The surface is a distance-weighted average of the sensors near each "
+        "point — the same estimate everywhere, so it no longer matters how many "
+        "neighbours a sensor happens to have. It fades where few sensors support "
+        f"it and stops entirely more than {SURFACE_CUTOFF_KM:g} km from any "
+        "sensor, on the same fixed colour scale as the dots. Read the dots for "
+        "actual measurements: averaging necessarily softens the extremes."
     )
 
 # --- time-of-day profile -----------------------------------------------------
@@ -496,7 +512,7 @@ if not all_day:
     )
     chart = chart + marker
 st.altair_chart(
-    chart.properties(height=220, background=surface).configure_view(strokeWidth=0),
+    chart.properties(height=220, background=chart_surface).configure_view(strokeWidth=0),
     use_container_width=True,
 )
 if not all_day:
@@ -577,7 +593,7 @@ with right:
                     alt.Tooltip("samples:Q", title="Readings", format=","),
                 ]
             )
-            .properties(height=260, background=surface)
+            .properties(height=260, background=chart_surface)
             .configure_view(strokeWidth=0),
             use_container_width=True,
         )

@@ -71,6 +71,36 @@ STALLED_NIGHT_RATIO = 3.0
 # is a fallback value, not a place.
 MAX_STREETS_PER_COORD = 2
 
+# --- Heat surface ------------------------------------------------------------
+# The map's smooth layer is computed here rather than by deck.gl's HeatmapLayer,
+# which estimates point *density* -- the wrong statistical object for an
+# attribute measured at fixed stations. Binning-then-averaging made intensity
+# depend on how many neighbours a sensor happens to have: the east of the city
+# has a median of 3 sensors within 1 km against 30 in the centre, so a lone
+# sensor rendered undiluted while a clustered one was averaged toward the local
+# mean. Two sensors with identical congestion drew differently.
+#
+# Instead, every grid cell gets the same expression -- a Gaussian
+# distance-weighted mean of the sensors near it -- so density no longer changes
+# intensity. It changes the *support* for the estimate, which is encoded as
+# opacity instead of being hidden.
+SURFACE_STEP_KM = 0.2       # 10,200 cells over the sensor bbox, ~45 ms to build
+SURFACE_BANDWIDTH_KM = 0.5  # 38% of cells end up supported; the rest is empty
+SURFACE_CUTOFF_KM = 1.2     # beyond this we assert nothing at all
+
+# Support (the sum of kernel weights) spans 0.02 to 52 on real slices, median
+# 0.61 -- so opacity has to be sublinear or almost every cell renders invisible.
+# A median cell lands near 0.53, a well-supported one hits the ceiling, an
+# isolated one sits at the floor: visible, but visibly provisional.
+SURFACE_ALPHA_MAX = 0.85
+SURFACE_ALPHA_MIN = 0.10
+SURFACE_ALPHA_REF = 2.0     # support at which a cell is considered well-backed
+SURFACE_ALPHA_GAMMA = 0.4
+
+# Local equirectangular conversion, good enough across a single city.
+KM_PER_DEG_LAT = 111.0
+CITY_LAT = -34.9
+
 # --- Palette (see dataviz skill: sequential = one hue, diverging = 2 + gray) --
 SURFACE_LIGHT = "#fcfcfb"
 SURFACE_DARK = "#1a1a19"
