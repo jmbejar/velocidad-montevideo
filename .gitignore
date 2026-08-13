@@ -6,13 +6,22 @@ __pycache__/
 # Machine-local tool settings.
 .claude/settings.local.json
 
-# Raw open-data CSVs are large (262 MB/month) and re-downloadable.
+# Raw open-data files are large (~115 MB/month zipped, 780 MB expanded) and
+# re-downloadable with `mvdspeed-fetch`. The cached INUMET weather CSVs live
+# under data/raw/weather/ and are covered by the same rule.
 data/raw/*
 !data/raw/.gitkeep
 
-# Derived parquet: regenerate with `uv run mvdspeed-etl <csv>`.
+# Derived parquet. Everything here is regenerable from data/raw, but the three
+# outputs the app reads are committed anyway so a deployment needs no ETL run
+# and no 900 MB download -- they total under 8 MB. Listed individually rather
+# than force-added, so that this is a decision recorded in the repo rather than
+# a fact about someone's index.
 data/processed/*
 !data/processed/.gitkeep
+!data/processed/measurements.parquet
+!data/processed/detectors.parquet
+!data/processed/weather.parquet
 
 # Raw Overpass responses (~11 MB). The chunk table built from them,
 # data/streets.parquet, *is* committed so the app never needs Overpass.
