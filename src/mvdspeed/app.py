@@ -41,7 +41,7 @@ from mvdspeed.config import (
 )
 
 st.set_page_config(
-    page_title="Velocidad promedio · Montevideo",
+    page_title="Velocidad promedio · Montevideo · Agosto 2026",
     page_icon="🚗",
     layout="wide",
 )
@@ -251,21 +251,23 @@ with st.sidebar:
     metric_name = st.radio(
         "Colour the map by",
         list(METRICS),
+        index=list(METRICS).index("Average speed"),
         help="Each metric uses the colour scale its data actually calls for.",
     )
     metric = METRICS[metric_name]
     st.caption(metric["help"])
 
+    layers_available = [
+        "Surface + sensors",
+        "Surface only",
+        "Streets + sensors",
+        "Streets only",
+        "Sensors only",
+    ]
     layer_choice = st.radio(
         "Map layer",
-        [
-            "Surface + sensors",
-            "Surface only",
-            "Streets + sensors",
-            "Streets only",
-            "Sensors only",
-        ],
-        index=0,
+        layers_available,
+        index=layers_available.index("Streets only"),
         help=(
             "The surface is a distance-weighted estimate between sensors, faded "
             "where few sensors support it. The streets carry the same estimate "
@@ -304,7 +306,7 @@ with st.sidebar:
         ),
     )
     min_samples = st.slider(
-        "Minimum readings per sensor", 1, 60, 3,
+        "Minimum readings per sensor", 1, 60, 20,
         help="Hides sensors with too little data at the selected time to average.",
     )
     dark_map = st.toggle(
@@ -332,7 +334,7 @@ map_surface = SURFACE_DARK if dark_map else SURFACE_LIGHT
 basemap = pdk.map_styles.CARTO_DARK if dark_map else pdk.map_styles.CARTO_LIGHT
 
 # --- header & time control ----------------------------------------------------
-st.title("Velocidad promedio · Montevideo")
+st.title("Velocidad promedio · Montevideo · Agosto 2026")
 st.markdown(
     f"<p style='color:{TEXT_MUTED};margin-top:-0.6rem'>"
     f"{len(dataset.sites)} measuring points · "
