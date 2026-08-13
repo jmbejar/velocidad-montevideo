@@ -6,6 +6,18 @@ build and drain.
 
 ![Montevideo speed dashboard](docs/screenshot.jpg)
 
+## Data source
+
+The sensor readings come from [*Velocidad promedio vehicular en las principales
+avenidas de Montevideo*](https://catalogodatos.gub.uy/dataset/velocidad-promedio-vehicular-en-las-principales-avenidas-de-montevideo),
+published on Uruguay's open data catalogue by the Centro de Gestión de Movilidad,
+Departamento de Movilidad, Intendencia de Montevideo, under the Licencia de Datos
+Abiertos de Gobierno de Uruguay. A new monthly CSV appears once the month closes.
+Nothing in this repo is an official product of the Intendencia.
+
+Road geometry is from [OpenStreetMap](https://www.openstreetmap.org/copyright)
+contributors (ODbL), and the basemap tiles are CARTO's.
+
 ## Quick start
 
 ```bash
