@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Machine-local tool settings.
+.claude/settings.local.json
+
+# Raw open-data CSVs are large (262 MB/month) and re-downloadable.
+data/raw/*
+!data/raw/.gitkeep
+
+# Derived parquet: regenerate with `uv run mvdspeed-etl <csv>`.
+data/processed/*
+!data/processed/.gitkeep
