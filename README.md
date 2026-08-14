@@ -209,16 +209,16 @@ nothing. During the match, city-wide:
 |---|---|---|
 | Uruguay at the World Cup | **+3.43** | 0.000 |
 | Libertadores **at home** | +0.72 | 0.010 |
-| Libertadores **away** | +0.13 | 0.69 |
+| Libertadores **away** | +0.16 | 0.57 |
 
 So the small positive on home nights is not television. It is the stadium's own
 effect leaking into a city-wide mean, and the away column is what tells you so.
 The ranking is the one you would guess and now has a number on it: the national
 team moves the city about five times harder than a club tie does, and a club tie
 with no ground in town does not move it at all. (One caveat the app states:
-away ties kick off later on average, on roads that are already emptier — a
-baseline of 35.4 km/h against 33.5 — so part of that gap is the clock rather
-than the stadium.)
+three of the six away ties kick off at 23:00 against a latest of 21:30 at home,
+so they are measured on roads already a little emptier — a baseline of 34.5 km/h
+against 33.5. Small next to the effect it rules out, but not zero.)
 
 **And what a home match does is local.** Subtracting the far ring from the near
 one separates the two. Across Nacional's four home matches at the Gran Parque
