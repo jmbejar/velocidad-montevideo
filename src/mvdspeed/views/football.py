@@ -23,6 +23,8 @@ from mvdspeed import colors, data as mvd, events as ev, surface
 from mvdspeed.charts import SERIES_HUES, make_axis
 from mvdspeed.config import (
     CONTROL_WEEKS,
+    HOLIDAYS_CSV,
+    MATCHES_CSV,
     DE_EMPHASIS,
     MATCH_MINUTES,
     SURFACE_ALPHA_GAMMA,
@@ -66,6 +68,10 @@ WINDOWS = {
 
 
 
+# Recomputed on every rerun, so pressing R after editing a calendar is enough.
+STAMP = (MATCHES_CSV.stat().st_mtime, HOLIDAYS_CSV.stat().st_mtime)
+
+
 # --- loaders ------------------------------------------------------------------
 @st.cache_resource(show_spinner="Loading sensor data…")
 def load_data() -> mvd.Dataset:
@@ -78,7 +84,17 @@ def load_panel() -> ev.EventPanel:
 
 
 @st.cache_resource(show_spinner="Reading the fixture list…")
-def load_calendars() -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_calendars(stamp: tuple[float, float] = ()) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The two hand-edited calendars, re-read whenever either file changes.
+
+    `stamp` is the pair of file modification times and is never used in the
+    body. It is here to be part of the cache key, because these files get
+    edited far more often than the code does and the alternative is worse than
+    it looks: this is a cache_resource that reads once per process, and every
+    slice below was keyed on the *row count*, which does not change when a
+    kick-off time does. A corrected time sat on disk for a whole session while
+    the page kept serving the old parse and reporting "no kick-off time".
+    """
     return ev.load_events(), ev.load_holidays()
 
 
@@ -87,7 +103,7 @@ def study_for(
     _key: tuple, tiers: tuple[str, ...], site_ids: tuple[int, ...] | None,
     weeks: int, include_zeros: bool, min_samples: int, dry_only: bool,
 ) -> pd.DataFrame:
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
     return ev.event_study(
         load_panel(), matches[matches["tier"].isin(tiers)], holidays,
         site_ids=list(site_ids) if site_ids is not None else None,
@@ -101,7 +117,7 @@ def placebo_for(
     _key: tuple, tiers: tuple[str, ...], site_ids: tuple[int, ...] | None,
     weeks: int, include_zeros: bool, min_samples: int, dry_only: bool, draws: int,
 ) -> ev.Placebo:
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
     return ev.placebo(
         load_panel(), matches[matches["tier"].isin(tiers)], holidays,
         site_ids=list(site_ids) if site_ids is not None else None,
@@ -136,7 +152,7 @@ def decay_for(
     the whole point of the section is that the two numbers are the same data
     sliced two ways.
     """
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
     data = load_data()
     here = _played_at(matches, tiers, venue_name)
     shared = dict(
@@ -155,7 +171,7 @@ def sites_for(
     _key: tuple, tiers: tuple[str, ...], window: tuple[int, int], weeks: int,
     include_zeros: bool, min_samples: int, dry_only: bool,
 ) -> pd.DataFrame:
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
     data = load_data()
     return ev.site_deltas(
         load_panel(), matches[matches["tier"].isin(tiers)], holidays, data.sites,
@@ -164,11 +180,82 @@ def sites_for(
     )
 
 
+@st.cache_data(show_spinner="Working out the headline findings…")
+def key_findings(_key: tuple, weeks: int, min_samples: int) -> dict:
+    """The three numbers the page exists to report, over every fixture on file.
+
+    Deliberately independent of the sidebar. These are conclusions about the
+    panel, not about whatever is currently selected, and recomputing them from
+    the selection would let a reader change a finding by clicking a filter.
+
+    Computed rather than written down so that editing a calendar moves them.
+    """
+    matches, holidays = load_calendars(STAMP)
+    panel, data = load_panel(), load_data()
+    shared = dict(weeks=weeks, min_samples=min_samples, all_events=matches)
+
+    def during(tier: str) -> dict:
+        sel = matches[matches["tier"] == tier]
+        if sel["kickoff_bucket"].notna().sum() == 0:
+            return {}
+        study = ev.event_study(panel, sel, holidays, **shared)
+        null = ev.placebo(panel, sel, holidays, draws=200, **shared)
+        effect = ev.window_effect(study, ev.DURING_WINDOW)
+        return {**effect, "p": null.p_value(study, ev.DURING_WINDOW)}
+
+    # The best-covered ground, among fixtures that are actually in the study.
+    # Without the tier filter this picks the Centenario, which has the most
+    # sensors around it and whose only fixtures are the two held out on purpose
+    # -- a headline finding resting on the rows the page refuses to report.
+    studied = matches[matches["tier"].isin(TIERS)]
+    best, bands, city = None, None, None
+    for ground in sorted(set(studied.loc[studied["in_montevideo"], "venue"])):
+        here = studied[studied["venue"] == ground]
+        if here["kickoff_bucket"].notna().sum() == 0:
+            continue
+        spot = (float(here["venue_lat"].iloc[0]), float(here["venue_lon"].iloc[0]))
+        reach = ev.site_distances(data.sites[data.sites["is_usable"]], *spot)
+        n_close = int((reach <= ev.NEAR_RING_KM).sum())
+        if best is not None and n_close <= best[1]:
+            continue
+        rings = ev.distance_study(panel, here, holidays, data.sites, venue=spot,
+                                  **shared)
+        if rings.empty:
+            continue
+        best = (ground, n_close)
+        bands, city = rings, ev.event_study(panel, here, holidays, **shared)
+
+    gradient = {}
+    if bands is not None:
+        per_band = [
+            (front, ev.window_effect(group, ev.PRE_WINDOW)["delta"])
+            for front, group in bands.groupby("band_from")
+        ]
+        per_band.sort()
+        gradient = {
+            "ground": best[0].replace("Estadio ", ""),
+            "near_band": bands.loc[bands["band_from"] == per_band[0][0], "band"].iloc[0],
+            "near": per_band[0][1],
+            "far_band": bands.loc[bands["band_from"] == per_band[-1][0], "band"].iloc[0],
+            "far": per_band[-1][1],
+            "city": ev.window_effect(city, ev.PRE_WINDOW)["delta"],
+        }
+
+    rain = mvd.rain_headline(load_data(), dows=mvd.DAY_SCOPES["Weekdays (Mon-Fri)"])
+    return {
+        "national": during("national"),
+        "home": during("libertadores"),
+        "away": during("libertadores_away"),
+        "gradient": gradient,
+        "rain": rain.get("delta", float("nan")),
+    }
+
+
 @st.cache_data(show_spinner=False)
 def table_for(
     _key: tuple, weeks: int, include_zeros: bool, min_samples: int, dry_only: bool
 ) -> pd.DataFrame:
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
     return ev.event_table(
         load_panel(), matches[matches["tier"].isin(TIERS)], holidays,
         all_events=matches, weeks=weeks, include_zeros=include_zeros,
@@ -178,7 +265,7 @@ def table_for(
 
 @st.cache_data(show_spinner=False)
 def peaks_for(_key: tuple, tiers: tuple[str, ...], weeks: int) -> pd.DataFrame:
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
     return ev.peak_shift(
         load_panel(), matches[matches["tier"].isin(tiers)], holidays,
         weeks=weeks, all_events=matches,
@@ -187,18 +274,26 @@ def peaks_for(_key: tuple, tiers: tuple[str, ...], weeks: int) -> pd.DataFrame:
 
 try:
     dataset = load_data()
-    matches, holidays = load_calendars()
+    matches, holidays = load_calendars(STAMP)
 except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
 
 panel = load_panel()
-CACHE_KEY = (len(dataset.measurements), len(matches))
+CACHE_KEY = (len(dataset.measurements), len(matches), STAMP)
 
 # Venues come from the fixture list rather than a hardcoded dict, so a match
 # added to the CSV brings its ground with it.
+# Grounds come from the fixture list rather than a hardcoded dict, so a match
+# added to the CSV brings its ground with it -- but only from fixtures that are
+# in the study. The Centenario is in the file and is never analysable: its two
+# fixtures are the held-out ones, so it has no business appearing as a place the
+# page can measure.
 venues = (
-    matches.loc[matches["in_montevideo"], ["venue", "venue_lat", "venue_lon"]]
+    matches.loc[
+        matches["in_montevideo"] & matches["tier"].isin(TIERS),
+        ["venue", "venue_lat", "venue_lon"],
+    ]
     .drop_duplicates("venue")
     .set_index("venue")
 )
@@ -287,9 +382,51 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# --- key findings -------------------------------------------------------------
+# Fixed conclusions about the panel, above the interactive part rather than
+# buried under it, and not affected by the sidebar: a reader should not be able
+# to change a finding by clicking a filter.
+found = key_findings(CACHE_KEY, weeks, min_samples)
+nat, home, away, grad = (
+    found["national"], found["home"], found["away"], found["gradient"],
+)
+
+st.subheader("Three findings")
+if nat:
+    base = nat["baseline_speed"]
+    st.markdown(
+        f"**1 · Uruguay playing empties the city.** During the match, speeds "
+        f"across Montevideo run **{nat['delta']:+.1f} km/h** above their matched "
+        f"baseline — {base:.1f} to {base + nat['delta']:.1f} km/h, "
+        f"{nat['pct']:+.0%} — at p = {nat['p']:.3f}. Rain, the other thing that "
+        f"moves the whole city, costs {found['rain']:+.1f} km/h."
+    )
+if home and away:
+    st.markdown(
+        f"**2 · Club football does not. Its stadium does.** Away ties are the "
+        f"same clubs and no ground in town: they move **{away['delta']:+.1f} km/h** "
+        f"(p = {away['p']:.2f}), nothing. Home ties move "
+        f"**{home['delta']:+.1f} km/h** (p = {home['p']:.2f}). The gap is the "
+        f"ground, not the television."
+    )
+if grad:
+    # Only claim a reversal when the two ends really do have opposite signs;
+    # otherwise state the gradient and let the numbers say how steep it is.
+    reverses = grad["near"] * grad["far"] < 0
+    st.markdown(
+        f"**3 · And the stadium effect "
+        f"{'reverses' if reverses else 'fades'} with distance.** Before kick-off "
+        f"at the {grad['ground']}: **{grad['near']:+.1f} km/h** within "
+        f"{grad['near_band']}, **{grad['far']:+.1f}** out at {grad['far_band']}. "
+        f"Averaged over the whole city it is {grad['city']:+.1f} — a number that "
+        f"describes neither end."
+    )
+st.divider()
+
 # --- headline numbers ---------------------------------------------------------
 peaks = peaks_for(CACHE_KEY, tiers, weeks)
 shift = peaks["shift"].median() if not peaks.empty else float("nan")
+st.subheader("The selected fixtures")
 
 def levels(effect: dict[str, float]) -> str:
     """"31.9 → 35.3 km/h", or nothing when there is no level to quote.
@@ -660,56 +797,15 @@ st.caption(
     "every baseline above."
 )
 
-with st.expander("When the evening peak arrived"):
-    st.dataframe(
-        peaks[["date", "label", "event_low", "control_low", "shift", "n_controls"]],
-        hide_index=True, use_container_width=True,
-        column_config={
-            "date": st.column_config.DateColumn("Date", format="ddd DD MMM"),
-            "label": st.column_config.TextColumn("Match"),
-            "event_low": st.column_config.TextColumn("Slowest half hour"),
-            "control_low": st.column_config.TextColumn("On control days"),
-            "shift": st.column_config.NumberColumn("Shift (min)", format="%+d"),
-            "n_controls": st.column_config.NumberColumn("Control days", format="%d"),
-        },
-    )
-    st.caption(
-        "Half-hour buckets, so this statistic can only ever move in steps of 30 "
-        "minutes and a small real shift will read as zero."
-    )
-
-with st.expander("How the counterfactual is built, and what went wrong without it"):
+with st.expander("Method and limits"):
     st.markdown(
-        f"""
-For every sensor and every half hour touched by a match, the comparison is
-**that same sensor, that same half hour, that same weekday**, on dates within
-{weeks} weeks that carry no fixture and no holiday. The differences are taken
-inside each sensor and only then averaged, weighted by how much data the match
-night has — so a sensor that reported on the night but not on half its control
-days cannot shift the answer just by being present on one side.
-
-The obvious alternative — one pooled "typical Sunday at 19:00" over the whole
-panel — does not work, and it fails in the direction that flatters the
-hypothesis. Measured that way, **every June weekday afternoon in this panel
-reads 0.54 km/h slow**, because January is in the same average and sits
-**2.07 km/h above it**: Montevideo empties for the summer. That artefact has the
-same sign and roughly the same size as the pre-kick-off congestion this page was
-built to look for. A pooled baseline does not just add noise here — it
-manufactures the finding.
-
-Saturday 18 July 2026 makes the same point from the other side. In the raw panel
-it lights up across 21 consecutive half hours and looks almost exactly like a
-match evening. It is *Jura de la Constitución*, a public holiday, and it is in
-`data/events/holidays.csv` precisely so it can never serve as a control.
-
-The grey band is not a confidence interval from a formula. It is {draws} runs of
-this same estimator on these same fixtures moved to dates when nothing happened,
-which prices in the fact that one unusual Tuesday moves hundreds of rows
-together — the assumption a t-test over 4.4 million serially correlated rows
-would get badly wrong.
-        """
+        f"Every figure compares a match half hour against **the same sensor, the "
+        f"same half hour, the same weekday**, on dates within {weeks} weeks with "
+        f"no fixture and no holiday. p is {draws} placebo runs of that same "
+        f"estimator on days when nothing happened — not a t-test, which 4.4 M "
+        f"serially correlated rows would drive to zero regardless."
     )
-
-with st.expander("What these numbers do not show"):
-    for caveat in ev.event_caveats(len(matches), int(matches["kickoff_bucket"].notna().sum())):
+    for caveat in ev.event_caveats(
+        len(matches), int(matches["kickoff_bucket"].notna().sum())
+    ):
         st.markdown(f"- {caveat}")

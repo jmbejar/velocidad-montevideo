@@ -278,10 +278,10 @@ Bañados de Carrasco and the nearest sensor is 8.1 km away, on Camino Carrasco.
 A distance-banded read of the approach road — 8 de Octubre out to Camino
 Carrasco — comes out noisy and without a usable gradient across three home
 matches, so the app draws no panel for that ground rather than an inconclusive
-one that could be mistaken for a measurement. By contrast the Centenario and
-the Gran Parque Central have 26 and 32 sensors inside a kilometre. Peñarol's
-*away* ties are still measurable, because those are television and television
-is city-wide.
+one that could be mistaken for a measurement. The Gran Parque Central, by
+contrast, has 32 sensors inside a kilometre and the nearest 298 m away — it is
+the one ground in the study that can be measured at all. Peñarol's *away* ties
+are still measurable, because those are television and television is city-wide.
 
 **The baseline is the whole problem.** Measured against a norm pooled over the
 whole Jan–Aug panel, *every* June weekday afternoon reads 0.54 km/h slow, because

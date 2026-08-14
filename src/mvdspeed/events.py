@@ -18,8 +18,8 @@ Two mechanisms are in play and they point opposite ways.
   way out than on the way in, and it is invisible more than a kilometre or two
   away.
 
-On a Centenario night both fire at the same time, in opposite directions, which
-is why `ring_study` exists.
+On the night of a match in Montevideo both fire at once, in opposite
+directions, which is why `ring_study` and `distance_study` exist.
 
 The estimator is a difference-in-differences in matched-pairs form. For every
 (sensor, half-hour) touched by a match, the counterfactual is *that same sensor,
@@ -94,10 +94,9 @@ POST_WINDOW = (MATCH_MINUTES, MATCH_MINUTES + 90)
 CORRIDOR_STREETS = ("8 de Octubre", "Camino Carrasco", "Cno Carrasco")
 
 # Rings for the distance-decay view, in kilometres from the ground. Tight where
-# the effect changes fastest and wide out where it has flattened; at the
-# Centenario and the Gran Parque Central these hold roughly 26-32 sensors in the
-# innermost band and over a hundred in the next, which is enough for each point
-# on the curve to mean something.
+# the effect changes fastest and wide out where it has flattened; at the Gran
+# Parque Central these hold 32 sensors in the innermost band and over a hundred
+# in the next, which is enough for each point on the curve to mean something.
 DISTANCE_EDGES_KM = (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0)
 
 # Distance bands along that axis, in kilometres from the stadium. They start at
@@ -1037,11 +1036,10 @@ def event_caveats(n_events: int, n_usable: int) -> list[str]:
         "That gap is small next to the effect it is being used to rule out, but it "
         "is not zero, and this panel cannot separate the stadium from the clock.",
         "There is no sensor within 8 km of the Campeon del Siglo -- the nearest is "
-        "8.1 km away, on Camino Carrasco -- so a Penarol home match has no ring to "
-        "measure. The corridor bins along 8 de Octubre and Camino Carrasco are "
-        "indirect evidence about the road there, not a measurement at the ground. "
-        "The Centenario and the Gran Parque Central are both well covered, with "
-        "26 and 32 sensors inside a kilometre.",
+        "8.1 km away, on Camino Carrasco -- so a Penarol home match cannot be "
+        "measured at the ground at all, and no panel is drawn for it. The Gran "
+        "Parque Central is the one ground in the study with real coverage: 32 "
+        "sensors inside a kilometre, the nearest 298 m away.",
         "Weather is not matched between a match day and its controls by default. "
         "Rain costs about 0.9 km/h city-wide, which is smaller than the effects "
         "here but not negligible against the pre-kick-off window; the sidebar "
