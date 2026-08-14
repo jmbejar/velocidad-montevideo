@@ -25,6 +25,7 @@ import pytest
 
 from mvdspeed import data as mvd
 from mvdspeed import events as ev
+from mvdspeed.config import HOLIDAYS_CSV, MATCHES_CSV
 
 KICKOFF_BUCKET = 38  # 19:00, the commonest kick-off in the real fixture list
 LATE_BUCKET = 43  # 21:30, late enough that the window crosses midnight
@@ -612,6 +613,24 @@ def test_fixtures_held_out_of_the_study_still_block_their_own_dates():
     held_out = events[events["tier"] == "blocked"]
     assert not held_out.empty
     assert set(held_out["date"]) <= ev.blocked_dates(events, holidays)
+
+
+@pytest.mark.parametrize("path", [MATCHES_CSV, HOLIDAYS_CSV])
+def test_no_row_of_a_hand_edited_calendar_has_a_stray_comma(path):
+    """An unquoted comma in a note breaks the whole page, not just its own row.
+
+    These files are typed by hand, the notes column is prose, and prose wants
+    commas. pandas raises `Expected 13 fields, saw 15` from deep inside the C
+    parser and the page dies on load with a message naming neither the file nor
+    the line. This says which line, before anyone opens the app.
+    """
+    rows = path.read_text().splitlines()
+    expected = len(rows[0].split(","))
+    for number, row in enumerate(rows[1:], start=2):
+        assert len(row.split(",")) == expected, (
+            f"{path.name} line {number} has {len(row.split(','))} fields, not "
+            f"{expected} — a comma inside a field. Rewrite the prose without it."
+        )
 
 
 def test_the_holiday_list_contains_the_day_that_looks_most_like_a_match():

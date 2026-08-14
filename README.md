@@ -98,14 +98,17 @@ sensor set moves onto roads the current extract does not cover.
 **Tránsito vs Fútbol** crosses the panel with a hand-curated fixture list and
 asks what a big match does to the city. The top of it is city-wide — an event
 study around kick-off against a placebo band, because the broadcast effect has
-no ground. Below that, **one panel per ground**, and the *kind* of panel is
-chosen by the coverage each one actually has rather than by which club plays
-there: a ground with sensors around it gets a distance-decay curve and a
-near-against-far difference, and a ground without gets the approach road and an
-explicit warning that nothing being shown is a measurement at the stadium.
-Then a per-sensor map and a per-match table. The method is written up in
-`src/mvdspeed/events.py`; the short version is in "Measuring a football match"
-below.
+no ground. Below that, **one panel per measurable ground**, showing the effect
+binned by distance. A ground only gets a panel if there are sensors around it,
+which is why the Campeón del Siglo has none: there is nothing within 8 km of it,
+so Peñarol's home ties are not measurable at the ground and the page says
+nothing rather than drawing an approach road and hoping it reads as a stadium
+effect. Then a per-sensor map and a per-match table.
+
+The method is written up in `src/mvdspeed/events.py`, which carries more than
+the page currently draws — `ring_study`, `ring_placebo` and `corridor_study`
+are tested and documented but not rendered. The short version of the method is
+in "Measuring a football match" below.
 
 The two calendars it needs are hand-typed and committed, because no feed we can
 reach publishes either:
@@ -205,17 +208,17 @@ nothing. During the match, city-wide:
 | | Δ km/h | p |
 |---|---|---|
 | Uruguay at the World Cup | **+3.43** | 0.000 |
-| Libertadores **at home** | +0.72 | 0.013 |
-| Libertadores **away** | −0.12 | 0.74 |
+| Libertadores **at home** | +0.72 | 0.010 |
+| Libertadores **away** | +0.13 | 0.69 |
 
 So the small positive on home nights is not television. It is the stadium's own
 effect leaking into a city-wide mean, and the away column is what tells you so.
 The ranking is the one you would guess and now has a number on it: the national
 team moves the city about five times harder than a club tie does, and a club tie
 with no ground in town does not move it at all. (One caveat the app states:
-away ties kick off later, 21:00–23:00 against 19:00–21:30, on roads that are
-already emptier — 36.8 km/h against 33.5 — so part of that gap is the clock
-rather than the stadium.)
+away ties kick off later on average, on roads that are already emptier — a
+baseline of 35.4 km/h against 33.5 — so part of that gap is the clock rather
+than the stadium.)
 
 **And what a home match does is local.** Subtracting the far ring from the near
 one separates the two. Across Nacional's four home matches at the Gran Parque
@@ -270,12 +273,15 @@ easy to get wrong in the direction of finding nothing:
   football: any effect with opposite signs in different places reads as "no
   effect" in an aggregate.
 
-**Peñarol's ground cannot be measured this way.** The Campeón del Siglo is out
-in Bañados de Carrasco and the nearest sensor is 8.1 km away, on Camino
-Carrasco. The distance-banded corridor along 8 de Octubre and Camino Carrasco
-comes out noisy and without a usable gradient across three home matches; it is
-in the app, labelled as inconclusive. By contrast the Centenario and the Gran
-Parque Central have 26 and 32 sensors inside a kilometre.
+**Peñarol's ground cannot be measured at all.** The Campeón del Siglo is out in
+Bañados de Carrasco and the nearest sensor is 8.1 km away, on Camino Carrasco.
+A distance-banded read of the approach road — 8 de Octubre out to Camino
+Carrasco — comes out noisy and without a usable gradient across three home
+matches, so the app draws no panel for that ground rather than an inconclusive
+one that could be mistaken for a measurement. By contrast the Centenario and
+the Gran Parque Central have 26 and 32 sensors inside a kilometre. Peñarol's
+*away* ties are still measurable, because those are television and television
+is city-wide.
 
 **The baseline is the whole problem.** Measured against a norm pooled over the
 whole Jan–Aug panel, *every* June weekday afternoon reads 0.54 km/h slow, because
