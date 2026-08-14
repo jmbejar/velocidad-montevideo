@@ -501,15 +501,20 @@ def ring_study(
     if inner.empty or outer.empty:
         return pd.DataFrame(columns=["rel", "minutes", "near", "far", "did"])
 
-    merged = inner[["rel", "minutes", "delta", "n_sites", "samples"]].merge(
-        outer[["rel", "delta", "n_sites"]], on="rel", suffixes=("_near", "_far")
-    )
+    merged = inner[
+        ["rel", "minutes", "delta", "n_sites", "samples", "baseline_speed"]
+    ].merge(outer[["rel", "delta", "n_sites"]], on="rel", suffixes=("_near", "_far"))
     return merged.rename(
         columns={
             "delta_near": "near",
             "delta_far": "far",
             "n_sites_near": "n_near",
             "n_sites_far": "n_far",
+            # The near ring's own normal speed, so a difference can be quoted
+            # against a level. Deliberately not carried into the `did` column's
+            # frame: a difference of two differences has no baseline, and
+            # dividing it by this one would invent a percentage.
+            "baseline_speed": "near_baseline",
         }
     ).assign(did=lambda f: f["near"] - f["far"])
 
@@ -772,13 +777,20 @@ def event_table(
     *,
     site_ids=None,
     window: int = EVENT_WINDOW_BUCKETS,
+    all_events: pd.DataFrame | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     """One row per fixture, so heterogeneity is visible rather than averaged away.
 
     A dozen matches is far too few to trust any single row, and reporting only
     the pooled curve would hide that. The sample column is here to be looked at.
+
+    `events` is what gets a row; `all_events` is what blocks control days. They
+    are separate for the same reason they are separate in `event_study`: a
+    fixture can be too minor to list and still be a day nothing else should be
+    compared against.
     """
+    blocking = all_events if all_events is not None else events
     rows = []
     for event in events.itertuples():
         if pd.isna(event.kickoff_bucket):
@@ -800,7 +812,7 @@ def event_table(
         one = events[events["date"] == event.date]
         study = event_study(
             panel, one, holidays, site_ids=site_ids, window=window,
-            all_events=events, **kwargs,
+            all_events=blocking, **kwargs,
         )
         rows.append(
             {

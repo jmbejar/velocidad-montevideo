@@ -6,6 +6,9 @@ The estimator lives in mvdspeed/events.py and is documented there. This file is
 the presentation: which fixtures, which sensors, which window, and how to draw a
 number next to the range of numbers the same method produces on days when
 nothing happened.
+
+Page config is set by app.py, which runs before this in the same pass; calling
+st.set_page_config again here would raise.
 """
 
 from __future__ import annotations
@@ -33,12 +36,6 @@ from mvdspeed.config import (
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
-)
-
-st.set_page_config(
-    page_title="Fútbol y tránsito · Montevideo · 2026",
-    page_icon="⚽",
-    layout="wide",
 )
 
 # The fixture list's `tier` column, in the order the page offers them: loudest
@@ -191,7 +188,8 @@ def table_for(
 ) -> pd.DataFrame:
     matches, holidays = load_calendars()
     return ev.event_table(
-        load_panel(), matches, holidays, weeks=weeks, include_zeros=include_zeros,
+        load_panel(), matches[matches["tier"].isin(TIERS)], holidays,
+        all_events=matches, weeks=weeks, include_zeros=include_zeros,
         min_samples=min_samples, dry_only=dry_only,
     )
 
@@ -347,6 +345,20 @@ if scope == CORRIDOR:
 peaks = peaks_for(CACHE_KEY, tiers, weeks)
 shift = peaks["shift"].median() if not peaks.empty else float("nan")
 
+def levels(effect: dict[str, float]) -> str:
+    """"31.9 → 35.3 km/h", or nothing when there is no level to quote.
+
+    A change on its own is unreadable: +3.4 km/h is a rounding error on a
+    motorway and a transformation of a jammed avenue, and the reader cannot
+    tell which without the speeds it moved between. A ring difference has no
+    single level underneath it, so it gets no line rather than a made-up one.
+    """
+    if not np.isfinite(effect.get("baseline_speed", float("nan"))):
+        return ""
+    base = effect["baseline_speed"]
+    return f"{base:.1f} → {base + effect['delta']:.1f} km/h"
+
+
 kpi = st.columns(len(WINDOWS) + 1)
 for column, (name, window) in zip(kpi, WINDOWS.items()):
     effect = ev.window_effect(study, window)
@@ -362,6 +374,8 @@ for column, (name, window) in zip(kpi, WINDOWS.items()):
                  f"p is the share of placebo runs that produced a swing at least "
                  f"this big in either direction.",
         )
+        if levels(effect):
+            st.caption(levels(effect))
 with kpi[-1]:
     st.metric(
         "Evening peak moved",
@@ -485,6 +499,10 @@ if scope == RING and venue_name:
         ]
         ribbon = did.merge(ring_null.band(), on=["rel", "minutes"], how="left")
 
+        near = ring.rename(
+            columns={"near": "delta", "near_baseline": "baseline_speed"}
+        )[["rel", "minutes", "delta", "baseline_speed", "samples"]]
+
         did_kpi = st.columns(len(WINDOWS))
         for column, (name, window) in zip(did_kpi, WINDOWS.items()):
             value = ev.window_effect(did, window)["delta"]
@@ -498,6 +516,9 @@ if scope == RING and venue_name:
                     help="Near minus far, so the city-wide broadcast swing is "
                          "already subtracted out.",
                 )
+                near_levels = levels(ev.window_effect(near, window))
+                if near_levels:
+                    st.caption(f"near the ground: {near_levels}")
 
         tidy = ring.melt(
             id_vars=["minutes"], value_vars=["near", "far", "did"],
@@ -728,9 +749,11 @@ st.dataframe(
     },
 )
 st.caption(
-    "City-wide, every fixture on file, whatever the sidebar has selected — a "
-    "dozen matches is far too few for any single row to be worth much, and the "
-    "spread between them is the honest picture of how much this varies."
+    "City-wide, every fixture in the study, whatever the sidebar has selected — "
+    "a dozen matches is far too few for any single row to be worth much, and the "
+    "spread between them is the honest picture of how much this varies. Fixtures "
+    "held out of the study are not listed, but their dates are still kept out of "
+    "every baseline above."
 )
 
 with st.expander("When the evening peak arrived"):

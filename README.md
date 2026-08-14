@@ -400,9 +400,10 @@ src/mvdspeed/
   osm.py      one-off Overpass fetch -> data/streets.parquet
   colors.py   value -> colour scales and legends
   charts.py   axis chrome and the categorical hues, shared by both pages
-  app.py      the Streamlit dashboard
-  pages/
-    1_Football_and_traffic.py   the football page
+  app.py      entry point: names the pages, runs the navigation
+  views/
+    home.py       speed by time of day, crossed with rain
+    football.py   what a big match does to traffic
 data/events/
   matches.csv   hand-curated fixtures, one source URL per row
   holidays.csv  Uruguayan holidays, so they never become control days
@@ -413,9 +414,12 @@ tests/
   test_events.py           the match estimator, incl. the January artefact
 ```
 
-The `pages/` directory is Streamlit's own multi-page convention, so the run
-command is unchanged and `app.py` is untouched. One cosmetic consequence: the
-home page appears in the sidebar nav as "app", after its filename.
+`app.py` is a twenty-line `st.navigation` router and nothing else. Streamlit's
+`pages/` directory convention is cheaper to set up but takes each sidebar label
+from a filename, which is fine until the entry point is itself a page — then the
+label is "app": accurate about the file, useless about the contents. The pages
+are listed as script paths rather than imported, so each still runs top to
+bottom on its own and neither knows the other exists.
 
 ## Visual design notes
 

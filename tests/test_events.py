@@ -521,6 +521,38 @@ def test_a_fixture_with_no_kick_off_time_is_skipped_rather_than_assumed():
     assert pd.isna(table.loc[table["date"] == pd.Timestamp(dates[4]), "during"].iloc[0])
 
 
+def test_a_held_out_fixture_is_absent_from_the_table_but_still_blocks_controls():
+    """Dropping a row from the listing must not hand its date back as ordinary."""
+    dates = weekly("2026-04-05", 11)
+    listed_date, held_out_date = dates[5], dates[6]
+    frame = flat_panel(dates)
+    frame.loc[
+        (frame["date"] == listed_date) & (frame["bucket"] == KICKOFF_BUCKET), "speed"
+    ] += 4.0
+    frame.loc[
+        (frame["date"] == held_out_date) & (frame["bucket"] == KICKOFF_BUCKET), "speed"
+    ] += 10.0
+
+    panel = make_panel(frame)
+    every = fixtures(
+        [
+            {"date": listed_date, "kickoff_bucket": KICKOFF_BUCKET, "tier": "shown"},
+            {"date": held_out_date, "kickoff_bucket": KICKOFF_BUCKET, "tier": "blocked"},
+        ]
+    )
+    listed = every[every["tier"] == "shown"]
+
+    guarded = ev.event_table(panel, listed, NO_HOLIDAYS, window=2, all_events=every)
+    leaky = ev.event_table(panel, listed, NO_HOLIDAYS, window=2)
+
+    assert len(guarded) == 1, "the held-out fixture gets no row"
+    assert guarded["date"].iloc[0] == pd.Timestamp(listed_date)
+    assert guarded["during"].iloc[0] > leaky["during"].iloc[0], (
+        "without all_events the held-out fixture returns to the baseline and "
+        "dilutes the effect of the one that is listed"
+    )
+
+
 def test_an_empty_fixture_selection_returns_an_empty_frame_not_an_error():
     dates = weekly("2026-03-01", 5)
     panel = make_panel(flat_panel(dates))
