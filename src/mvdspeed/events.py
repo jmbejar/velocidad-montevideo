@@ -93,6 +93,13 @@ POST_WINDOW = (MATCH_MINUTES, MATCH_MINUTES + 90)
 # the street labels of the continuous axis from Tres Cruces east.
 CORRIDOR_STREETS = ("8 de Octubre", "Camino Carrasco", "Cno Carrasco")
 
+# Rings for the distance-decay view, in kilometres from the ground. Tight where
+# the effect changes fastest and wide out where it has flattened; at the
+# Centenario and the Gran Parque Central these hold roughly 26-32 sensors in the
+# innermost band and over a hundred in the next, which is enough for each point
+# on the curve to mean something.
+DISTANCE_EDGES_KM = (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0)
+
 # Distance bands along that axis, in kilometres from the stadium. They start at
 # 8 because that is where the sensors start: the 24 locatable sites on this
 # corridor span 8.1 km to 14.3 km out, so bands any nearer would be drawn empty
@@ -566,6 +573,52 @@ def site_distances(sites: pd.DataFrame, lat: float, lon: float) -> pd.Series:
     return distance.where(sites["has_location"], np.inf)
 
 
+def distance_study(
+    panel: EventPanel,
+    events: pd.DataFrame,
+    holidays: pd.DataFrame,
+    sites: pd.DataFrame,
+    *,
+    venue: tuple[float, float],
+    edges: tuple[float, ...] = DISTANCE_EDGES_KM,
+    streets: tuple[str, ...] | None = None,
+    **kwargs,
+) -> pd.DataFrame:
+    """The effect as a function of distance from the ground, one study per band.
+
+    This is the shape that shows why a city-wide average is the wrong
+    instrument here. Around a ground the effect changes *sign* with distance --
+    congested within a kilometre or two, emptier further out as everybody
+    watches -- so the mean over all sensors is not a small effect but two large
+    ones cancelling. On Libertadores home nights the city-wide figure is +0.75
+    km/h, which reads as "nothing happened", while the same nights are moving
+    the near bands and the far bands by more than a km/h each in opposite
+    directions.
+
+    `streets` narrows the bands to named roads, which is what `corridor_study`
+    uses it for. Left None, every locatable sensor is binned.
+    """
+    chooseable = sites["street"].isin(streets) if streets is not None else True
+    distance = site_distances(sites, *venue)
+    out = []
+    for lo, hi in zip(edges, edges[1:]):
+        chosen = sites.loc[chooseable & (distance >= lo) & (distance < hi), "site_id"]
+        if chosen.empty:
+            continue
+        study = event_study(panel, events, holidays, site_ids=chosen, **kwargs)
+        if study.empty:
+            continue
+        study["band"] = f"{lo:g}–{hi:g} km"
+        study["band_from"] = lo
+        study["band_mid"] = (lo + hi) / 2
+        out.append(study)
+    if not out:
+        return pd.DataFrame(
+            columns=["rel", "minutes", "delta", "band", "band_from", "band_mid"]
+        )
+    return pd.concat(out, ignore_index=True)
+
+
 def corridor_study(
     panel: EventPanel,
     events: pd.DataFrame,
@@ -580,28 +633,16 @@ def corridor_study(
     """The effect along an approach road, binned by distance from the ground.
 
     For the Campeon del Siglo this is all there is. The nearest sensor to that
-    stadium is 6.4 km away, so there is no ring to draw and no near-side
+    stadium is 8.1 km away, so there is no ring to draw and no near-side
     comparison to make; what a Penarol home match can leave behind is a gradient
     on the road out, strongest at the eastern end. A gradient that is flat, or
     that points the wrong way, is evidence against the effect -- which is the
     point of binning rather than reporting one corridor-wide number.
     """
-    on_corridor = sites["street"].isin(streets)
-    distance = site_distances(sites, *venue)
-    out = []
-    for lo, hi in zip(edges, edges[1:]):
-        chosen = sites.loc[on_corridor & (distance >= lo) & (distance < hi), "site_id"]
-        if chosen.empty:
-            continue
-        study = event_study(panel, events, holidays, site_ids=chosen, **kwargs)
-        if study.empty:
-            continue
-        study["band"] = f"{lo:g}–{hi:g} km"
-        study["band_from"] = lo
-        out.append(study)
-    if not out:
-        return pd.DataFrame(columns=["rel", "minutes", "delta", "band", "band_from"])
-    return pd.concat(out, ignore_index=True)
+    return distance_study(
+        panel, events, holidays, sites,
+        venue=venue, edges=edges, streets=streets, **kwargs,
+    )
 
 
 @dataclass(frozen=True)

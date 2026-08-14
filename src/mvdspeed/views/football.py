@@ -59,13 +59,6 @@ WINDOWS = {
     "After the whistle": ev.POST_WINDOW,
 }
 
-CITY, RING, CORRIDOR = "The whole city", "Near the ground", "The road east"
-
-# Peñarol's ground, out in Bañados de Carrasco. It gets a constant of its own
-# rather than coming from the fixture list because the corridor view is about
-# the road *to* it, and that view has to exist even when no fixture there is
-# selected.
-CAMPEON_DEL_SIGLO = (-34.796917, -56.067167)
 
 
 # --- loaders ------------------------------------------------------------------
@@ -154,16 +147,45 @@ def ring_placebo_for(
     )
 
 
+@st.cache_data(show_spinner="Measuring the effect ring by ring…")
+def decay_for(
+    _key: tuple, tiers: tuple[str, ...], venue_name: str,
+    venue: tuple[float, float],
+    weeks: int, include_zeros: bool, min_samples: int, dry_only: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Distance bands and the city-wide curve, over the *same* fixtures.
+
+    Returned together so they cannot drift apart: comparing bands measured on
+    the four matches played at a ground against a city-wide figure measured on
+    every fixture in the sidebar would be an apples-to-oranges cancellation, and
+    the whole point of the section is that the two numbers are the same data
+    sliced two ways.
+    """
+    matches, holidays = load_calendars()
+    data = load_data()
+    here = _played_at(matches, tiers, venue_name)
+    shared = dict(
+        weeks=weeks, include_zeros=include_zeros, min_samples=min_samples,
+        dry_only=dry_only, all_events=matches,
+    )
+    bands = ev.distance_study(
+        load_panel(), here, holidays, data.sites, venue=venue, **shared
+    )
+    whole_city = ev.event_study(load_panel(), here, holidays, **shared)
+    return bands, whole_city
+
+
 @st.cache_data(show_spinner=False)
 def corridor_for(
-    _key: tuple, tiers: tuple[str, ...], weeks: int, include_zeros: bool,
-    min_samples: int, dry_only: bool,
+    _key: tuple, tiers: tuple[str, ...], venue_name: str,
+    venue: tuple[float, float],
+    weeks: int, include_zeros: bool, min_samples: int, dry_only: bool,
 ) -> pd.DataFrame:
     matches, holidays = load_calendars()
     data = load_data()
     return ev.corridor_study(
-        load_panel(), matches[matches["tier"].isin(tiers)], holidays, data.sites,
-        venue=CAMPEON_DEL_SIGLO, weeks=weeks, include_zeros=include_zeros,
+        load_panel(), _played_at(matches, tiers, venue_name), holidays, data.sites,
+        venue=venue, weeks=weeks, include_zeros=include_zeros,
         min_samples=min_samples, dry_only=dry_only, all_events=matches,
     )
 
@@ -253,27 +275,6 @@ with st.sidebar:
         st.warning("None of the selected fixtures has a kick-off time on file.")
         st.stop()
 
-    st.subheader("Where to look")
-    scope_names = [CITY, RING, CORRIDOR]
-    scope = st.radio(
-        "Sensors",
-        scope_names,
-        help="The whole city sees the broadcast effect. A ring around a ground "
-             "sees the stadium on top of it, which is why the near ring is "
-             "reported against a far one.",
-    )
-    venue_name = None
-    if scope == RING:
-        in_play = sorted(set(selection.loc[selection["in_montevideo"], "venue"]))
-        if not in_play:
-            st.info(
-                "None of the selected fixtures was played in Montevideo, so "
-                "there is no ground to draw a ring around."
-            )
-            scope = CITY
-        else:
-            venue_name = st.selectbox("Ground", in_play)
-
     st.subheader("Method")
     weeks = st.slider(
         "Control days: weeks either side", 1, 8, CONTROL_WEEKS,
@@ -306,23 +307,15 @@ with st.sidebar:
         "and holidays: hand-curated in data/events/, one source URL per row."
     )
 
-site_ids = None
-if scope == RING and venue_name:
-    venue = (float(venues.loc[venue_name, "venue_lat"]),
-             float(venues.loc[venue_name, "venue_lon"]))
-elif scope == CORRIDOR:
-    venue = CAMPEON_DEL_SIGLO
-    distance = ev.site_distances(dataset.sites, *venue)
-    on_corridor = dataset.sites["street"].isin(ev.CORRIDOR_STREETS)
-    site_ids = tuple(dataset.sites.loc[on_corridor & np.isfinite(distance), "site_id"])
-else:
-    venue = None
-
 tiers = tuple(chosen)
 knobs = (weeks, include_zeros, min_samples, dry_only)
 
-study = study_for(CACHE_KEY, tiers, site_ids, *knobs)
-null = placebo_for(CACHE_KEY, tiers, site_ids, *knobs, draws)
+# The top of the page is always the whole city, because the broadcast effect is
+# a city-wide thing and has no ground. Anything local gets its own panel further
+# down, one per ground, so that a reader is not asked to pick a scope out of a
+# sidebar before knowing which grounds are even measurable.
+study = study_for(CACHE_KEY, tiers, None, *knobs)
+null = placebo_for(CACHE_KEY, tiers, None, *knobs, draws)
 
 # --- header -------------------------------------------------------------------
 st.title("Fútbol y tránsito · Montevideo · 2026")
@@ -333,13 +326,6 @@ st.markdown(
     f"with no fixture and no holiday.</p>",
     unsafe_allow_html=True,
 )
-
-if scope == CORRIDOR:
-    st.caption(
-        f"Showing the {len(site_ids)} sensors on 8 de Octubre and Camino Carrasco. "
-        "There is no sensor within 5 km of the Campeón del Siglo, so this is the "
-        "road there, not the ground."
-    )
 
 # --- headline numbers ---------------------------------------------------------
 peaks = peaks_for(CACHE_KEY, tiers, weeks)
@@ -467,113 +453,47 @@ with st.expander("Table view of this line"):
     st.download_button(
         "Download this slice as CSV",
         view.to_csv(index=False).encode(),
-        file_name=f"football-{'-'.join(tiers)}-{scope.replace(' ', '-')}.csv",
+        file_name=f"football-{'-'.join(tiers)}-city-wide.csv",
         mime="text/csv",
     )
 
-# --- separating the stadium from the television -------------------------------
-if scope == RING and venue_name:
-    at_venue = _played_at(matches, tiers, venue_name)
-    n_here = int(at_venue["kickoff_bucket"].notna().sum())
-    st.subheader(f"Near the {venue_name} against the rest of the city")
-    st.caption(
-        f"The {n_here} selected fixture{'s' if n_here != 1 else ''} actually "
-        f"played here. Matches the same clubs played elsewhere are left out: a "
-        f"ring only means something on the nights something happened inside it."
-    )
-    ring = (
-        ring_for(CACHE_KEY, tiers, venue_name, venue, *knobs)
-        if n_here else pd.DataFrame()
-    )
-    if ring.empty or ring["n_near"].max() == 0:
-        st.info(
-            "No sensors close enough to that ground to draw a ring."
-            if n_here else "None of the selected fixtures was played here."
-        )
-    else:
-        ring_null = ring_placebo_for(
-            CACHE_KEY, tiers, venue_name, venue, *knobs, draws
-        )
-        did = ring.rename(columns={"did": "delta"})[
-            ["rel", "minutes", "delta", "samples"]
-        ]
-        ribbon = did.merge(ring_null.band(), on=["rel", "minutes"], how="left")
+# --- one panel per ground -----------------------------------------------------
+# The two grounds here are in completely different measurement situations -- 32
+# sensors inside a kilometre of the Gran Parque Central, and nothing at all
+# inside eight of the Campeón del Siglo -- and hiding that behind a single "near
+# the ground" control made the page look more capable than the network is. So
+# each ground gets its own section, and the *kind* of section is chosen by the
+# coverage it actually has rather than by which club it belongs to.
+played_here = sorted(set(selection.loc[selection["in_montevideo"], "venue"]))
+for ground in played_here:
+    here = _played_at(matches, tiers, ground)
+    n_here = int(here["kickoff_bucket"].notna().sum())
+    if n_here == 0:
+        continue
+    club = here["home"].mode().iloc[0]
+    spot = (float(venues.loc[ground, "venue_lat"]),
+            float(venues.loc[ground, "venue_lon"]))
+    reach = ev.site_distances(dataset.sites[dataset.sites["is_usable"]], *spot)
+    n_close = int((reach <= ev.NEAR_RING_KM).sum())
+    nearest = float(reach.min())
+    fixtures_here = f"{n_here} home fixture{'s' if n_here != 1 else ''} selected."
 
-        near = ring.rename(
-            columns={"near": "delta", "near_baseline": "baseline_speed"}
-        )[["rel", "minutes", "delta", "baseline_speed", "samples"]]
+    st.subheader(f"{club} at the {ground.replace('Estadio ', '')}")
 
-        did_kpi = st.columns(len(WINDOWS))
-        for column, (name, window) in zip(did_kpi, WINDOWS.items()):
-            value = ev.window_effect(did, window)["delta"]
-            p = ring_null.p_value(did, window)
-            with column:
-                st.metric(
-                    name,
-                    "—" if not np.isfinite(value) else f"{value:+.2f} km/h",
-                    delta="" if not np.isfinite(p) else f"p = {p:.3f}",
-                    delta_color="off",
-                    help="Near minus far, so the city-wide broadcast swing is "
-                         "already subtracted out.",
-                )
-                near_levels = levels(ev.window_effect(near, window))
-                if near_levels:
-                    st.caption(f"near the ground: {near_levels}")
-
-        tidy = ring.melt(
-            id_vars=["minutes"], value_vars=["near", "far", "did"],
-            var_name="series", value_name="delta",
-        )
-        names = {"near": "Near the ground", "far": "Rest of the city",
-                 "did": "Difference (the stadium's own share)"}
-        tidy["series"] = tidy["series"].map(names)
-        st.altair_chart(
-            (
-                alt.Chart(ribbon).mark_area(color=DE_EMPHASIS, opacity=0.45).encode(
-                    x=alt.X("minutes:Q", scale=alt.Scale(nice=False), axis=minute_axis),
-                    y=alt.Y("p05:Q", axis=axis),
-                    y2=alt.Y2("p95:Q"),
-                )
-                + alt.Chart(tidy).mark_line(strokeWidth=2).encode(
-                    x=alt.X("minutes:Q", title="Minutes from kick-off",
-                            scale=alt.Scale(nice=False), axis=minute_axis),
-                    y=alt.Y("delta:Q", title="km/h vs the matched baseline", axis=axis),
-                    color=alt.Color(
-                        "series:N", title=None,
-                        scale=alt.Scale(domain=list(names.values()), range=SERIES_HUES),
-                        legend=alt.Legend(orient="top", labelColor=TEXT_SECONDARY),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("series:N", title=""),
-                        alt.Tooltip("minutes:Q", title="Min from kick-off", format="+d"),
-                        alt.Tooltip("delta:Q", title="km/h", format="+.2f"),
-                    ],
-                )
-                + alt.Chart(tidy).mark_rule(color=TEXT_MUTED, strokeWidth=1).encode(
-                    y=alt.datum(0)
-                )
-                + kickoff
-            )
-            .properties(height=300, background=SURFACE_LIGHT)
-            .configure_view(strokeWidth=0),
-            use_container_width=True,
-        )
+    if n_close == 0:
+        # The far case: no ring to draw, only the road there.
         st.caption(
-            f"{int(ring['n_near'].max())} sensors within {ev.NEAR_RING_KM:g} km, "
-            f"{int(ring['n_far'].max())} past {ev.FAR_RING_KM:g} km. The far ring "
-            "gets the television and not the stadium, so the difference between "
-            "the two is the part that is actually about people travelling to a "
-            "ground — the only line here that is not also a broadcast effect. The "
-            "band is the placebo null for that difference, drawn from the same "
-            "placebo dates for both rings so the two are subtracted like for like."
+            f"{fixtures_here} **There is no sensor within {nearest:.1f} km of this "
+            f"ground** — it sits out in Bañados de Carrasco, past the edge of the "
+            f"network — so there is no ring to draw and nothing below is a "
+            f"measurement at the stadium. What can be measured is the road out: "
+            f"the continuous 8 de Octubre → Camino Carrasco axis, binned by how "
+            f"far along it each sensor sits."
         )
-
-if scope == CORRIDOR:
-    st.subheader("Along 8 de Octubre and Camino Carrasco, by distance from the ground")
-    corridor = corridor_for(CACHE_KEY, tiers, *knobs)
-    if corridor.empty:
-        st.info("No corridor sensors reported for these fixtures.")
-    else:
+        corridor = corridor_for(CACHE_KEY, tiers, ground, spot, *knobs)
+        if corridor.empty:
+            st.info("No corridor sensors reported for these fixtures.")
+            continue
         order = (
             corridor[["band", "band_from"]].drop_duplicates()
             .sort_values("band_from")["band"].tolist()
@@ -583,15 +503,17 @@ if scope == CORRIDOR:
                 alt.Chart(corridor).mark_line(strokeWidth=2).encode(
                     x=alt.X("minutes:Q", title="Minutes from kick-off",
                             scale=alt.Scale(nice=False), axis=minute_axis),
-                    y=alt.Y("delta:Q", title="km/h vs the matched baseline", axis=axis),
+                    y=alt.Y("delta:Q", title="km/h vs the matched baseline",
+                            axis=axis),
                     color=alt.Color(
-                        "band:N", title="Distance from the Campeón del Siglo",
+                        "band:N", title="Distance from the ground",
                         scale=alt.Scale(domain=order, scheme="viridis"),
                         legend=alt.Legend(orient="top", labelColor=TEXT_SECONDARY),
                     ),
                     tooltip=[
                         alt.Tooltip("band:N", title="Band"),
-                        alt.Tooltip("minutes:Q", title="Min from kick-off", format="+d"),
+                        alt.Tooltip("minutes:Q", title="Min from kick-off",
+                                    format="+d"),
                         alt.Tooltip("delta:Q", title="km/h", format="+.2f"),
                         alt.Tooltip("n_sites:Q", title="Sensors", format=".0f"),
                     ],
@@ -606,10 +528,170 @@ if scope == CORRIDOR:
             use_container_width=True,
         )
         st.caption(
-            "If a Peñarol home match shows up on the road out, the near bands "
-            "should move more than the far ones. Four to nine sensors per band, "
-            "so read the shape rather than any one point."
+            "If a home match showed up on the road out, the nearest band should "
+            "move more than the farthest one. Three to eight sensors per band over "
+            f"{n_here} fixtures, and the bands cross each other repeatedly — read "
+            "this as inconclusive rather than as a result. It is drawn because a "
+            "negative answer shown honestly is worth more than leaving the ground "
+            "unmentioned."
         )
+        continue
+
+    # The covered case: the city-wide average hides it, and the ring recovers it.
+    st.caption(
+        f"{fixtures_here} **{n_close} sensors sit within {ev.NEAR_RING_KM:g} km** "
+        f"of this ground, the nearest {nearest * 1000:.0f} m away, so the effect "
+        f"here can be measured directly."
+    )
+
+    window_name = st.radio(
+        "Window", list(WINDOWS), horizontal=True, key=f"decay_window_{ground}",
+        help="Which slice of the evening the distance curve is measured over.",
+    )
+    window = WINDOWS[window_name]
+    bands, whole_city = decay_for(CACHE_KEY, tiers, ground, spot, *knobs)
+
+    if not bands.empty:
+        points = (
+            bands.groupby(["band", "band_from", "band_mid"], as_index=False)
+            .apply(
+                lambda g: pd.Series(
+                    {
+                        "delta": ev.window_effect(g, window)["delta"],
+                        "n_sites": g["n_sites"].max(),
+                        "samples": ev.window_effect(g, window)["samples"],
+                    }
+                ),
+                include_groups=False,
+            )
+            .sort_values("band_from")
+        )
+        city_delta = ev.window_effect(whole_city, window)["delta"]
+        rules = alt.Chart(pd.DataFrame({"y": [city_delta]}))
+        st.altair_chart(
+            (
+                alt.Chart(points).mark_line(
+                    color=SERIES_HUES[0], strokeWidth=2.5, point=True
+                ).encode(
+                    x=alt.X(
+                        "band_mid:Q", title="Kilometres from the ground",
+                        scale=alt.Scale(domain=[0, 12], nice=False),
+                        axis=make_axis(values=[0, 2, 4, 6, 8, 10, 12], format="d"),
+                    ),
+                    y=alt.Y("delta:Q", title="km/h vs the matched baseline",
+                            axis=axis),
+                    tooltip=[
+                        alt.Tooltip("band:N", title="Ring"),
+                        alt.Tooltip("delta:Q", title="km/h vs baseline",
+                                    format="+.2f"),
+                        alt.Tooltip("n_sites:Q", title="Sensors", format=".0f"),
+                        alt.Tooltip("samples:Q", title="Readings", format=","),
+                    ],
+                )
+                + alt.Chart(points).mark_rule(
+                    color=TEXT_MUTED, strokeWidth=1
+                ).encode(y=alt.datum(0))
+                + rules.mark_rule(
+                    color=SERIES_HUES[1], strokeWidth=2, strokeDash=[6, 4]
+                ).encode(y="y:Q")
+                + rules.mark_text(
+                    align="left", dx=6, dy=-8, color=SERIES_HUES[1], fontSize=11,
+                    text=f"city-wide average  {city_delta:+.2f} km/h",
+                ).encode(y="y:Q", x=alt.datum(0.2))
+            )
+            .properties(height=300, background=SURFACE_LIGHT)
+            .configure_view(strokeWidth=0),
+            use_container_width=True,
+        )
+        near_band, far_band = points.iloc[0], points.iloc[-1]
+        st.caption(
+            f"The nearest ring moves **{near_band['delta']:+.2f} km/h** and the "
+            f"farthest **{far_band['delta']:+.2f}**, while averaging every sensor "
+            f"in the city together gives **{city_delta:+.2f}** — the orange line, "
+            f"a number that describes neither end. Where the curve crosses zero is "
+            f"where the ground's congestion stops outweighing the emptier streets "
+            f"everyone left to go and watch. This is why a city-wide figure is the "
+            f"wrong instrument for a club match, and why the difference below is "
+            f"reported instead of a single number."
+        )
+
+    ring = ring_for(CACHE_KEY, tiers, ground, spot, *knobs)
+    if ring.empty or ring["n_near"].max() == 0:
+        continue
+    ring_null = ring_placebo_for(CACHE_KEY, tiers, ground, spot, *knobs, draws)
+    did = ring.rename(columns={"did": "delta"})[
+        ["rel", "minutes", "delta", "samples"]
+    ]
+    near = ring.rename(
+        columns={"near": "delta", "near_baseline": "baseline_speed"}
+    )[["rel", "minutes", "delta", "baseline_speed", "samples"]]
+    ribbon = did.merge(ring_null.band(), on=["rel", "minutes"], how="left")
+
+    st.markdown("**Near the ground against the rest of the city**")
+    did_kpi = st.columns(len(WINDOWS))
+    for column, (name, win) in zip(did_kpi, WINDOWS.items()):
+        value = ev.window_effect(did, win)["delta"]
+        p = ring_null.p_value(did, win)
+        with column:
+            st.metric(
+                name,
+                "—" if not np.isfinite(value) else f"{value:+.2f} km/h",
+                delta="" if not np.isfinite(p) else f"p = {p:.3f}",
+                delta_color="off",
+                help="Near minus far, so the city-wide broadcast swing is "
+                     "already subtracted out.",
+            )
+            near_levels = levels(ev.window_effect(near, win))
+            if near_levels:
+                st.caption(f"near the ground: {near_levels}")
+
+    tidy = ring.melt(
+        id_vars=["minutes"], value_vars=["near", "far", "did"],
+        var_name="series", value_name="delta",
+    )
+    names = {"near": "Near the ground", "far": "Rest of the city",
+             "did": "Difference (the stadium's own share)"}
+    tidy["series"] = tidy["series"].map(names)
+    st.altair_chart(
+        (
+            alt.Chart(ribbon).mark_area(color=DE_EMPHASIS, opacity=0.45).encode(
+                x=alt.X("minutes:Q", scale=alt.Scale(nice=False), axis=minute_axis),
+                y=alt.Y("p05:Q", axis=axis),
+                y2=alt.Y2("p95:Q"),
+            )
+            + alt.Chart(tidy).mark_line(strokeWidth=2).encode(
+                x=alt.X("minutes:Q", title="Minutes from kick-off",
+                        scale=alt.Scale(nice=False), axis=minute_axis),
+                y=alt.Y("delta:Q", title="km/h vs the matched baseline", axis=axis),
+                color=alt.Color(
+                    "series:N", title=None,
+                    scale=alt.Scale(domain=list(names.values()), range=SERIES_HUES),
+                    legend=alt.Legend(orient="top", labelColor=TEXT_SECONDARY),
+                ),
+                tooltip=[
+                    alt.Tooltip("series:N", title=""),
+                    alt.Tooltip("minutes:Q", title="Min from kick-off", format="+d"),
+                    alt.Tooltip("delta:Q", title="km/h", format="+.2f"),
+                ],
+            )
+            + alt.Chart(tidy).mark_rule(color=TEXT_MUTED, strokeWidth=1).encode(
+                y=alt.datum(0)
+            )
+            + kickoff
+        )
+        .properties(height=300, background=SURFACE_LIGHT)
+        .configure_view(strokeWidth=0),
+        use_container_width=True,
+    )
+    st.caption(
+        f"{int(ring['n_near'].max())} sensors within {ev.NEAR_RING_KM:g} km, "
+        f"{int(ring['n_far'].max())} past {ev.FAR_RING_KM:g} km. The far ring gets "
+        "the television and not the stadium, so the difference between the two is "
+        "the part that is actually about people travelling to a ground — the only "
+        "line here that is not also a broadcast effect. The band is the placebo "
+        "null for that difference, drawn from the same placebo dates for both "
+        "rings so the two are subtracted like for like."
+    )
 
 # --- the map ------------------------------------------------------------------
 st.subheader("Where in the city it happened")

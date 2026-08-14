@@ -95,10 +95,15 @@ sensor set moves onto roads the current extract does not cover.
 
 ### A second page: football
 
-**Football and traffic** crosses the panel with a hand-curated fixture list and
-asks what a big match does to the city. It carries an event study around
-kick-off with a placebo band, a near-the-ground-against-the-rest-of-the-city
-difference, a per-sensor map, and a per-match table. The method is written up in
+**Tránsito vs Fútbol** crosses the panel with a hand-curated fixture list and
+asks what a big match does to the city. The top of it is city-wide — an event
+study around kick-off against a placebo band, because the broadcast effect has
+no ground. Below that, **one panel per ground**, and the *kind* of panel is
+chosen by the coverage each one actually has rather than by which club plays
+there: a ground with sensors around it gets a distance-decay curve and a
+near-against-far difference, and a ground without gets the approach road and an
+explicit warning that nothing being shown is a measurement at the stadium.
+Then a per-sensor map and a per-match table. The method is written up in
 `src/mvdspeed/events.py`; the short version is in "Measuring a football match"
 below.
 
@@ -229,6 +234,23 @@ easy to get wrong in the direction of finding nothing:
   match night the city empties and the neighbourhood clogs at the same moment.
   The far ring gets the television and not the stadium, so the difference is the
   only line in the app that is about people travelling to a ground.
+- **A city-wide average is the wrong instrument entirely**, and the app draws
+  the reason rather than asserting it. Binned by distance from the Gran Parque
+  Central in the half hour before kick-off, the effect **changes sign**:
+
+  | Distance | Δ km/h |
+  |---|---|
+  | 0–1 km | **−1.85** |
+  | 1–2 km | −0.86 |
+  | 2–3 km | −0.35 |
+  | 3–5 km | **+0.60** |
+  | 5–8 km | +0.38 |
+  | **whole city** | **−0.33** |
+
+  The city-wide figure is not a small effect. It is two large ones cancelling,
+  and it describes neither end of the curve. This generalises well beyond
+  football: any effect with opposite signs in different places reads as "no
+  effect" in an aggregate.
 
 **Peñarol's ground cannot be measured this way.** The Campeón del Siglo is out
 in Bañados de Carrasco and the nearest sensor is 8.1 km away, on Camino
