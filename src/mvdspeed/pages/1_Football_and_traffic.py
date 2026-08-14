@@ -668,25 +668,6 @@ else:
         )
     )
 
-    in_play = sorted(set(selection.loc[selection["in_montevideo"], "venue"]))
-    grounds = venues.loc[in_play].reset_index() if in_play else pd.DataFrame()
-    if not grounds.empty:
-        layers.append(
-            pdk.Layer(
-                "ScatterplotLayer",
-                data=grounds.rename(columns={"venue_lat": "lat", "venue_lon": "lon"}),
-                get_position=["lon", "lat"],
-                get_fill_color=[11, 11, 11, 230],
-                get_radius=260,
-                radius_min_pixels=7,
-                radius_max_pixels=18,
-                stroked=True,
-                line_width_min_pixels=2,
-                get_line_color=[255, 255, 255, 255],
-                pickable=False,
-            )
-        )
-
     st.pydeck_chart(
         pdk.Deck(
             layers=layers,
@@ -724,8 +705,7 @@ else:
         f"Blue is faster than the baseline, red is slower. The scale is clipped at "
         f"the 95th percentile of the absolute change (±{limit:.1f} km/h): a single "
         f"sensor over a handful of evenings throws up a few very large numbers, and "
-        f"letting them set the range flattens the rest of the city to grey. Black "
-        f"rings mark the grounds in the current selection."
+        f"letting them set the range flattens the rest of the city to grey."
     )
 
 # --- per-fixture ---------------------------------------------------------------
