@@ -196,12 +196,30 @@ minutes before kick-off and reverses afterwards: at +150 minutes the roads are
 pre-kick-off congestion at all (+0.6 km/h, p = 0.29). All three matches were
 played in North America, so this is purely a broadcast effect.
 
-**A match played in Montevideo does the opposite, and it is local.** The
-city-wide view barely moves for club football — Libertadores home nights are
-+0.75 km/h during the match — because the ground's own congestion and the
-broadcast lull cancel. Subtracting the far ring from the near one separates
-them. Across Nacional's four home matches at the Gran Parque Central, the
-near-minus-far difference is:
+**Club football does not empty the city — only the national team does.** The
+fixture list carries Peñarol's and Nacional's *away* Libertadores ties as well
+as their home ones, and an away tie is the club-football equivalent of a World
+Cup match: same clubs, same competition, no ground in Montevideo. They move
+nothing. During the match, city-wide:
+
+| | Δ km/h | p |
+|---|---|---|
+| Uruguay at the World Cup | **+3.43** | 0.000 |
+| Libertadores **at home** | +0.72 | 0.013 |
+| Libertadores **away** | −0.12 | 0.74 |
+
+So the small positive on home nights is not television. It is the stadium's own
+effect leaking into a city-wide mean, and the away column is what tells you so.
+The ranking is the one you would guess and now has a number on it: the national
+team moves the city about five times harder than a club tie does, and a club tie
+with no ground in town does not move it at all. (One caveat the app states:
+away ties kick off later, 21:00–23:00 against 19:00–21:30, on roads that are
+already emptier — 36.8 km/h against 33.5 — so part of that gap is the clock
+rather than the stadium.)
+
+**And what a home match does is local.** Subtracting the far ring from the near
+one separates the two. Across Nacional's four home matches at the Gran Parque
+Central, the near-minus-far difference is:
 
 | Minutes from kick-off | Difference | Placebo 5th–95th |
 |---|---|---|

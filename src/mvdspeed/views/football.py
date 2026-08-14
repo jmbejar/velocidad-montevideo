@@ -50,8 +50,16 @@ TIERS = {
     "national": "Uruguay at the World Cup",
     "clasico": "Clásicos",
     "libertadores": "Libertadores at home",
-    "broadcast": "Other big broadcasts",
+    "libertadores_away": "Libertadores away",
+    "broadcast": "World Cup final",
 }
+
+# Away ties are the club-football control for a home tie: the same two clubs,
+# the same competition, the same audience -- and no ground in Montevideo. What
+# is left when the stadium is taken away is the broadcast effect on its own,
+# which is the comparison the near-against-far ring makes spatially, made here
+# by picking fixtures instead. If the two agree, that is worth more than either.
+AWAY_TIERS = ("libertadores_away",)
 
 WINDOWS = {
     "Before kick-off": ev.PRE_WINDOW,

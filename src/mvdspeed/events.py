@@ -1029,6 +1029,13 @@ def event_caveats(n_events: int, n_usable: int) -> list[str]:
         "Uruguay's three World Cup matches were played in North America, so they "
         "have no Montevideo venue and can only show a broadcast effect. Kick-off "
         "times are Uruguayan local time.",
+        "Away Libertadores ties are the club-football equivalent: same clubs, same "
+        "competition, no ground in Montevideo. But they are not a clean control "
+        "for the home ties, because they kick off later -- 21:00 to 23:00 against "
+        "19:00 to 21:30 -- so the roads they are measured on are already emptier "
+        "(a baseline of 36.8 km/h during the match against 33.5 at home). Some of "
+        "the home-minus-away gap is the stadium and some of it is the clock, and "
+        "this panel cannot separate the two.",
         "There is no sensor within 8 km of the Campeon del Siglo -- the nearest is "
         "8.1 km away, on Camino Carrasco -- so a Penarol home match has no ring to "
         "measure. The corridor bins along 8 de Octubre and Camino Carrasco are "
