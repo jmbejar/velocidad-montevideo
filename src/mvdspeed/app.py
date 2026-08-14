@@ -14,13 +14,13 @@ import pydeck as pdk
 import streamlit as st
 
 from mvdspeed import colors, data as mvd, streets, surface
+from mvdspeed.charts import SERIES_HUES, label, make_axis, ticks_for
 from mvdspeed.config import (
     ACCENT,
     BUCKET_MINUTES,
     DE_EMPHASIS,
     DIVERGING_COOL,
     DIVERGING_WARM,
-    GRIDLINE,
     MAX_PLAUSIBLE_SPEED,
     STREET_ALPHA_GAMMA,
     STREET_ALPHA_MAX,
@@ -599,14 +599,6 @@ if metric["domain"] is not None:
 else:
     vmin, vmax = float(frame[column].min()), float(frame[column].max())
 
-def ticks_for(vmin: float, vmax: float, invert: bool, formatter, n: int = 5) -> list[str]:
-    """Evenly spaced value labels running low-end -> high-end of the gradient."""
-    values = [vmin + (vmax - vmin) * i / (n - 1) for i in range(n)]
-    if invert:
-        values.reverse()
-    return [formatter(v) for v in values]
-
-
 if metric["kind"] == "diverging":
     limit = max(abs(vmin), abs(vmax))
     frame["color"] = colors.diverging(frame[column], limit, dark=dark_map)
@@ -626,10 +618,6 @@ else:
         kind="sequential", text_color=ink, muted_color=TEXT_MUTED, dark=dark_map,
         ramp=metric["ramp"],
     )
-
-def label(value, formatter) -> str:
-    return "no data" if pd.isna(value) else formatter(value)
-
 
 frame["metric_label"] = frame[column].map(lambda v: label(v, metric["format"]))
 frame["subtitle"] = frame["from_street"] + " → " + frame["to_street"]
@@ -841,20 +829,6 @@ elif layer_choice != "Sensors only":
 
 # --- time-of-day profile -----------------------------------------------------
 st.subheader(f"How the whole city moves through the day{scope_suffix}")
-
-def make_axis(grid: bool = True, **overrides) -> alt.Axis:
-    """Recessive hairline grid and muted labels, per the chart-chrome rules.
-
-    `grid` is a named parameter rather than one more override because the bar
-    chart's category axis wants it off, and passing it through `**overrides`
-    collides with the default set here.
-    """
-    return alt.Axis(
-        grid=grid, gridColor=GRIDLINE, gridWidth=1, domainColor=GRIDLINE,
-        tickColor=GRIDLINE, labelColor=TEXT_MUTED, titleColor=ink_secondary,
-        **overrides,
-    )
-
 
 axis = make_axis()
 hour_axis = make_axis(values=list(range(0, 25, 3)), format="d")
@@ -1269,7 +1243,7 @@ with right:
         # Slots 1-3 of the categorical theme, stepped for the active surface.
         # These three are the set that clears the all-pairs colour-vision gates.
         # The chart surface is always light, so these are the light steps.
-        hues = ["#2a78d6", "#eb6834", "#1baf7a"]
+        hues = SERIES_HUES
         scale = alt.Scale(domain=chosen, range=hues[: len(chosen)])
         street_base = alt.Chart(street_frame).encode(
             x=alt.X("hour:Q", title="Hour of day",

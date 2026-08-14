@@ -93,6 +93,32 @@ sensor set moves onto roads the current extract does not cover.
   stratified and unstratified figures shown side by side.
 - **Rankings and street comparison**, plus a CSV export of the current slice.
 
+### A second page: football
+
+**Football and traffic** crosses the panel with a hand-curated fixture list and
+asks what a big match does to the city. It carries an event study around
+kick-off with a placebo band, a near-the-ground-against-the-rest-of-the-city
+difference, a per-sensor map, and a per-match table. The method is written up in
+`src/mvdspeed/events.py`; the short version is in "Measuring a football match"
+below.
+
+The two calendars it needs are hand-typed and committed, because no feed we can
+reach publishes either:
+
+- `data/events/matches.csv` — one row per fixture with a Uruguay-local kick-off,
+  a `source` and a `verified` column. Rows whose kick-off time could not be
+  sourced are kept with `verified = time-unknown` and skipped by the estimator
+  rather than filled in with a guess. Fixtures judged too minor to study carry
+  `tier = blocked`: never offered as something to measure, but still barred from
+  serving as a control day, because a clásico final is not an ordinary Sunday
+  just because it has been left out of the analysis.
+- `data/events/holidays.csv` — Uruguayan public holidays, working holidays and
+  the bridge days around them. Not optional: Saturday 18 July 2026, *Jura de la
+  Constitución*, lights up 21 consecutive half hours and is otherwise
+  indistinguishable from a match evening.
+
+Adding a fixture is editing the CSV. Nothing needs rebuilding.
+
 ## What the data actually says
 
 Weekdays across 1 January – 12 August 2026, at 480 measuring points:
@@ -152,6 +178,69 @@ fall evenly across the day, so pooling every wet hour against every dry one
 compares a different mix of times as much as it compares weather. Pooled, the
 same data gives −1.15 km/h — about a quarter larger. The app shows both numbers
 side by side rather than asking you to trust the method.
+
+### Measuring a football match
+
+Two mechanisms, opposite signs, and only one of them is the one people expect.
+
+**Uruguay at the World Cup empties the city.** Across the three group matches,
+city-wide speed runs **+3.4 km/h (+10.3%)** above its matched baseline for the
+duration of the match — p = 0.000 against 500 placebo runs. It starts about 30
+minutes before kick-off and reverses afterwards: at +150 minutes the roads are
+1.1 km/h *slower* than normal as everyone leaves at once. There is no
+pre-kick-off congestion at all (+0.6 km/h, p = 0.29). All three matches were
+played in North America, so this is purely a broadcast effect.
+
+**A match played in Montevideo does the opposite, and it is local.** The
+city-wide view barely moves for club football — Libertadores home nights are
++0.75 km/h during the match — because the ground's own congestion and the
+broadcast lull cancel. Subtracting the far ring from the near one separates
+them. Across Nacional's four home matches at the Gran Parque Central, the
+near-minus-far difference is:
+
+| Minutes from kick-off | Difference | Placebo 5th–95th |
+|---|---|---|
+| −30 | **−1.57** | −1.00 … +0.86 |
+| 0 | −1.10 | −1.05 … +0.80 |
+| +120 | −1.69 | −0.83 … +0.62 |
+| **+150** | **−2.54** | −0.74 … +0.58 |
+
+Both ends clear the placebo band. Egress is the larger: over the ninety minutes
+after the whistle the neighbourhood runs **−1.71 km/h** against the rest of the
+city, p = 0.000. Ingress is real but *sharp* — **−1.57 km/h in the last half
+hour before kick-off, p = 0.004** — and it all but vanishes when averaged over
+the preceding ninety minutes (−0.45, p = 0.16), which is why the page reports
+both windows. The single league clásico also shifts the evening peak **45
+minutes earlier** than its control days.
+
+Two slicing decisions are doing real work in those numbers, and both are easy to
+get wrong in the direction of finding nothing:
+
+- **Only matches played at that ground count.** Pooling in the nights the same
+  clubs played across town adds days on which nothing happened inside the ring
+  and drags the estimate toward zero: the same ingress figure reads −0.61 km/h,
+  p = 0.16, once Peñarol's three home nights are mixed in.
+- **The near ring is reported against the far one, not against zero.** On a
+  match night the city empties and the neighbourhood clogs at the same moment.
+  The far ring gets the television and not the stadium, so the difference is the
+  only line in the app that is about people travelling to a ground.
+
+**Peñarol's ground cannot be measured this way.** The Campeón del Siglo is out
+in Bañados de Carrasco and the nearest sensor is 8.1 km away, on Camino
+Carrasco. The distance-banded corridor along 8 de Octubre and Camino Carrasco
+comes out noisy and without a usable gradient across three home matches; it is
+in the app, labelled as inconclusive. By contrast the Centenario and the Gran
+Parque Central have 26 and 32 sensors inside a kilometre.
+
+**The baseline is the whole problem.** Measured against a norm pooled over the
+whole Jan–Aug panel, *every* June weekday afternoon reads 0.54 km/h slow, because
+January — when Montevideo empties for the summer — sits 2.07 km/h above the same
+average. That artefact has the same sign and roughly the same size as the
+pre-kick-off congestion the page was built to look for. So the counterfactual is
+the same sensor, the same half hour, the same weekday, on nearby dates with no
+fixture and no holiday; and the uncertainty is 500 placebo runs of the identical
+estimator on days when nothing happened, not a t-test that 4.4 M serially
+correlated rows would drive to zero regardless.
 
 ## Reading the data honestly
 
@@ -300,16 +389,28 @@ src/mvdspeed/
   etl.py      monthly archives -> parquet (duckdb), panel-wide references
   weather.py  INUMET hourly observations -> weather.parquet
   data.py     loading and slicing, including the rain crossing
+  events.py   the football crossing: matched controls, placebo bands, rings
   surface.py  kernel-weighted heat surface over the point sensors
   streets.py  sensor -> road matching, and the three reach models
   osm.py      one-off Overpass fetch -> data/streets.parquet
   colors.py   value -> colour scales and legends
+  charts.py   axis chrome and the categorical hues, shared by both pages
   app.py      the Streamlit dashboard
+  pages/
+    1_Football_and_traffic.py   the football page
+data/events/
+  matches.csv   hand-curated fixtures, one source URL per row
+  holidays.csv  Uruguayan holidays, so they never become control days
 tests/
   test_fetch.py            month-name parsing across the feed's spellings
   test_etl.py              the histogram quantile, against quantile_cont
   test_weather_crossing.py the rain stratification, on known answers
+  test_events.py           the match estimator, incl. the January artefact
 ```
+
+The `pages/` directory is Streamlit's own multi-page convention, so the run
+command is unchanged and `app.py` is untouched. One cosmetic consequence: the
+home page appears in the sidebar nav as "app", after its filename.
 
 ## Visual design notes
 

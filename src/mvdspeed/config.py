@@ -21,6 +21,16 @@ WEATHER_PARQUET = DATA_PROCESSED / "weather.parquet"
 # is built from and are not committed.
 STREETS_PARQUET = PROJECT_ROOT / "data" / "streets.parquet"
 
+# Hand-curated calendars. Nothing in the open data says when a football match
+# kicked off or when a holiday fell, and no feed we can reach publishes either,
+# so these two are typed in by hand with a per-row source URL and committed. The
+# `verified` column in matches.csv is the record of what has been checked; rows
+# without a kick-off time are carried rather than guessed at, and skipped by the
+# estimator until someone fills one in.
+DATA_EVENTS = PROJECT_ROOT / "data" / "events"
+MATCHES_CSV = DATA_EVENTS / "matches.csv"
+HOLIDAYS_CSV = DATA_EVENTS / "holidays.csv"
+
 # --- Source catalogue --------------------------------------------------------
 # The monthly files are enumerated through CKAN's package_show, not by scraping
 # the dataset page and not by guessing URLs. Both alternatives break on things
@@ -129,6 +139,49 @@ RAIN_HEAVY_MM = 2.5
 # the app's dry baseline excludes them -- otherwise the "dry" side of the
 # comparison quietly contains wet tarmac and the measured penalty shrinks.
 RAIN_LAG_HOURS = 2
+
+# --- The football crossing ----------------------------------------------------
+# How far either side of kick-off the event study looks, in buckets. Eight is
+# four hours, which is wider than any plausible effect and deliberately so: the
+# hypothesis on the table says the interesting moment is the half hour *before*
+# kick-off, and a window drawn tightly around that assumption cannot ever
+# contradict it. A wide window lets the data say where the effect sits, and
+# gives the placebo band somewhere quiet to be measured against.
+EVENT_WINDOW_BUCKETS = 8
+
+# A match occupies roughly this long from kick-off to final whistle: two halves
+# of 45 plus a 15-minute interval, before stoppage time. Used only to place the
+# "during" window and to draw the second rule on the chart.
+MATCH_MINUTES = 105
+
+# Control days are drawn from the same weekday within this many weeks either
+# side of the match. Four weeks gives up to eight candidates, which is enough to
+# average the day-to-day noise down without reaching so far that the season
+# changes underneath the comparison.
+#
+# The width matters more than it looks. Measured against a baseline pooled over
+# the whole Jan-Aug panel, *every* June weekday afternoon comes out 0.54 km/h
+# slow -- not because of football but because January, when the city empties for
+# the summer, sits in the same average and pulls it up by 2.07. That artefact is
+# the same size and the same sign as the pre-kick-off congestion this page is
+# looking for, and a pooled baseline would have reported it as a finding.
+CONTROL_WEEKS = 4
+
+# Sensors nearer than this to a stadium are the "near ring"; sensors past
+# FAR_RING_KM are the comparison. The gap between them is left empty on purpose,
+# so the two groups are not arguing over the same kerb.
+NEAR_RING_KM = 1.5
+FAR_RING_KM = 5.0
+
+# How many placebo event sets the null band is built from. Each draw keeps the
+# real fixtures' weekday and kick-off time and moves them to an eligible date, so
+# the band answers "how big a swing does this estimator produce on a day when
+# nothing happened?" -- which a t-test over 4.4 M serially correlated rows cannot.
+PLACEBO_DRAWS = 500
+
+# Fixed so the page's numbers do not move between reruns. A band that shifted
+# every time someone touched a slider would be impossible to argue with.
+PLACEBO_SEED = 20260615
 
 # --- Site identity across months ---------------------------------------------
 # A measuring site is identified by its coordinate and its three street labels,
