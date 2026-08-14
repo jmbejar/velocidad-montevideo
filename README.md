@@ -2,7 +2,14 @@
 
 Interactive exploration of Montevideo's open traffic-sensor data: a city map with
 a congestion heatmap and a time-of-day slider, so you can watch the rush hour
-build and drain.
+build and drain — across eight months of 2026, and crossed with the hour-by-hour
+rainfall that fell on it.
+
+Two findings, if you only read this far. **The month matters far less than the
+hour**: the spread between the fastest and slowest month is 1.1 km/h, against
+roughly 20 km/h between the quietest and busiest hour of a single day. And
+**rain costs about 0.9 km/h, almost all of it at rush hour** — it barely touches
+an empty road at 06:00 and takes 2.7 km/h off the 18:00 peak.
 
 ![Montevideo speed dashboard](docs/screenshot.jpg)
 
@@ -12,22 +19,50 @@ The sensor readings come from [*Velocidad promedio vehicular en las principales
 avenidas de Montevideo*](https://catalogodatos.gub.uy/dataset/velocidad-promedio-vehicular-en-las-principales-avenidas-de-montevideo),
 published on Uruguay's open data catalogue by the Centro de Gestión de Movilidad,
 Departamento de Movilidad, Intendencia de Montevideo, under the Licencia de Datos
-Abiertos de Gobierno de Uruguay. A new monthly CSV appears once the month closes.
-Nothing in this repo is an official product of the Intendencia.
+Abiertos de Gobierno de Uruguay. A new monthly file appears once the month closes;
+the current month is published while it is still running. This build covers
+January to 12 August 2026 — 63 million readings.
+
+Weather comes from [INUMET](https://catalogodatos.gub.uy/organization/inumet)'s
+hourly observations, on the same catalogue, so the whole dashboard has one
+provenance story. INUMET publishes seven stations nationwide and exactly one is
+in Montevideo: **Aeropuerto Melilla**, in the northwest of the city. That is the
+honest limitation of the weather crossing and the app says so rather than burying
+it — the station is about 10 km from the middle of the sensor field, so it reports
+a frontal system over the city well and a single summer cell over one avenue
+badly.
 
 Road geometry is from [OpenStreetMap](https://www.openstreetmap.org/copyright)
 contributors (ODbL), and the basemap tiles are CARTO's.
 
+Nothing in this repo is an official product of the Intendencia or of INUMET.
+
 ## Quick start
 
+The processed parquet is committed, so the app runs with no download and no ETL:
+
 ```bash
-uv sync                                                          # install
-uv run mvdspeed-etl ~/Downloads/Velocidad_promedio_Agosto_2026.csv   # once
-uv run streamlit run src/mvdspeed/app.py                         # serve
+uv sync                                    # install
+uv run streamlit run src/mvdspeed/app.py   # serve
 ```
 
-The ETL turns the 262 MB / 3.1 M-row CSV into a 2 MB parquet pair in about 25
-seconds. Re-run it when a new month's file is published.
+To rebuild it from source, or to add a month once the Intendencia publishes one:
+
+```bash
+uv run mvdspeed-fetch --from 2026-01   # ~900 MB of monthly archives
+uv run mvdspeed-etl                    # every month in data/raw
+uv run mvdspeed-weather                # hourly INUMET rainfall for those dates
+```
+
+`mvdspeed-fetch` enumerates the catalogue rather than guessing URLs, and is
+restartable — an interrupted run costs one file, not the run. `mvdspeed-etl`
+turns 63 M raw readings into an 7.7 MB parquet in about six minutes, expanding
+one month at a time so peak disk stays at the archives plus ~800 MB.
+
+Both accept `--only 2026-07,2026-08` and `--from 2026-06`. Note that the ETL is
+**not** incremental by design: free-flow speed and every other "typical"
+reference is computed across all the months it is given, so adding August means
+re-running it over the whole panel rather than appending to it.
 
 Road geometry for the street layer ships with the repo
 (`data/streets.parquet`), so nothing else is needed. `uv run mvdspeed-osm
@@ -48,34 +83,87 @@ sensor set moves onto roads the current extract does not cover.
   animates the full day, and an all-day-average toggle. Colours are on a fixed
   scale, so hours are comparable as it runs.
 - **Day scope**: weekdays, weekend, or every day.
+- **Month filter**: any subset of the published months, feeding every view.
+- **Weather scope**: any weather, dry roads only, while it rained, or heavy rain
+  only — applied to the map, the curves and the rankings alike.
 - **The city's daily curve**, with the selected half hour marked.
+- **Month against month**: each month's mean against the year, and the shape of
+  the day with one month highlighted against the rest as context.
+- **What rain costs**: the wet/dry penalty by time of day and by avenue, with the
+  stratified and unstratified figures shown side by side.
 - **Rankings and street comparison**, plus a CSV export of the current slice.
 
 ## What the data actually says
 
-Weekdays across 1–11 August 2026, at 442 measuring points:
+Weekdays across 1 January – 12 August 2026, at 480 measuring points:
 
 | | |
 |---|---|
-| Free-flow peak | **42.8 km/h** at 02:30 |
-| Worst half hour | **20.8 km/h** at 17:30 |
-| Morning drop | 31.0 → 24.8 km/h between 07:00 and 07:30 |
-| Evening recovery | 22.3 → 27.4 km/h between 18:00 and 18:30 |
+| Free-flow peak | **41.9 km/h** at 02:30 |
+| Worst half hour | **21.8 km/h** at 17:30 |
+| Morning drop | 30.4 → 25.8 km/h between 07:00 and 07:30 |
+| Evening recovery | 23.7 → 26.0 km/h between 18:00 and 18:30 |
 
 The evening peak bites harder than the morning one, and midday never recovers to
-overnight speeds — the city sits on a ~23.7 km/h plateau from 08:00 to 16:00.
+overnight speeds — the city sits on a ~24.3 km/h plateau from 08:00 to 16:00.
+
+### The month matters far less than the hour
+
+Eight months in, the headline is how little the months differ. Weekday means run
+from **30.2 km/h in January** to **29.2 in March** — a spread of 1.1 km/h across
+the whole year, against roughly 20 km/h between the quietest and busiest hour of
+a single day.
+
+| Month | Mean km/h | Slowest half hour | Sensors |
+|---|---|---|---|
+| Jan 2026 | 30.2 | 24.3 at 17:00 | 413 |
+| Feb 2026 | 29.5 | 22.3 at 17:00 | 417 |
+| Mar 2026 | 29.2 | 21.1 at 17:00 | 419 |
+| Apr 2026 | 29.6 | 21.3 at 17:30 | 421 |
+| May 2026 | 29.9 | 21.2 at 17:30 | 418 |
+| Jun 2026 | 30.1 | 21.3 at 17:00 | 429 |
+| Jul 2026 | 30.0 | 21.4 at 17:30 | 424 |
+| Aug 2026 | 29.8 | 20.8 at 17:30 | 422 |
+
+January is the outlier and the reason is not traffic engineering: Montevideo
+empties in January. Its evening peak is a full 3 km/h faster than March's, which
+is the first full month back at work and school. Note the sensor counts — they
+are not the same set of sensors month to month, which is why the table carries
+them.
+
+### Rain costs about 0.9 km/h, and it costs it at rush hour
+
+Crossing the panel with INUMET's hourly rainfall gives a **−0.92 km/h (−3.1%)**
+weekday penalty on wet roads. But the average hides the shape:
+
+| Time | Dry | Wet | Difference |
+|---|---|---|---|
+| 06:00 | 34.9 | 34.7 | −0.22 |
+| 02:00–04:00 | — | — | −1.04 avg |
+| 18:00 | 23.9 | 21.2 | **−2.69** |
+
+Rain barely touches an empty road and bites hardest at 18:00, when there is
+already traffic to slow down. Of 106 avenues with enough data in both
+conditions, Larrañaga loses the most (−3.5 km/h, −13%), and 22 come out *faster*
+in the rain — partly thinner traffic, partly small samples.
+
+**That figure is stratified by time of day, and it has to be.** Rain does not
+fall evenly across the day, so pooling every wet hour against every dry one
+compares a different mix of times as much as it compares weather. Pooled, the
+same data gives −1.15 km/h — about a quarter larger. The app shows both numbers
+side by side rather than asking you to trust the method.
 
 ## Reading the data honestly
 
 The raw column `velocidad` hides three different things, and conflating them is
-the easiest way to draw a wrong map. Of 3,146,779 rows:
+the easiest way to draw a wrong map. Of 62,661,014 rows across the eight months:
 
 | | rows | treatment |
 |---|---|---|
-| A real speed measurement | 2,492,730 (79.2%) | used |
-| Exactly `0` | 155,359 (4.9%) | **excluded from averages by default** |
-| Empty | 491,222 (15.6%) | dropped — the sensor reported nothing |
-| Above 120 km/h | 7,468 (0.2%) | dropped as sensor error (the file reaches 540) |
+| A real speed measurement | 49,526,158 (79.0%) | used |
+| Exactly `0` | 3,210,562 (5.1%) | **excluded from averages by default** |
+| Empty | 9,762,711 (15.6%) | dropped — the sensor reported nothing |
+| Above 120 km/h | 161,583 (0.3%) | dropped as sensor error (the file reaches 720) |
 
 A `0` means *either* that no vehicle crossed the lane in those five minutes *or*
 that traffic was completely stopped, and nothing in the file distinguishes them.
@@ -85,7 +173,7 @@ readings" figure. The sidebar has a toggle if you want the other convention.
 
 Five further sensor-quality rules, all in `config.py`:
 
-- **13 sensors share one placeholder coordinate.** The feed falls back to
+- **41 sensors share one placeholder coordinate.** The feed falls back to
   `(-34.890561, -56.220631)` — a point out in the bay — when it has no real
   position, so Rambla, Belloni, Gral Flores, Bv Artigas, Bv Batlle y Ordoñez and
   Camino Carrasco all pile onto one dot in the water. Rather than hardcode that
@@ -97,69 +185,130 @@ Five further sensor-quality rules, all in `config.py`:
   their readings in the daily curve, where position is irrelevant, and are left
   off the map and the rankings, where it is not.
 
-- **37 of 908 lane detectors never measured moving traffic** (or never averaged
-  3 km/h) across the whole month, and are dropped before anything is aggregated.
+- **30 of 984 lane detectors never measured moving traffic** (or never averaged
+  3 km/h) across the whole panel, and are dropped before anything is aggregated.
   This test has to run per *lane*, because the raw file is one row per lane and a
   healthy lane hides a dead one when they are averaged together: `Barradas`
-  (Av Italia → Rambla) advertised two lanes, but lane 1 logged 3,168 zeros and
-  never a single moving vehicle. Judged at site level the site looks fine,
-  because lane 2 is. Ten otherwise-healthy sites had a lane dropped this way.
-  Their speeds barely move — a dead lane contributes only zeros, which are
-  excluded by default — but it stops them inflating lane counts and the
-  "Zero readings" figure, which fell from 1.9% to 0.7% at 06:00 once the dead
-  detectors stopped voting.
-- **16 sites where every lane is dead** are treated as stuck and excluded
+  (Av Italia → Rambla) advertises two lanes and one of them has never logged a
+  moving vehicle. Judged at site level the site looks fine, because the other
+  lane is. Eight otherwise-healthy sites had a lane dropped this way. Their
+  speeds barely move — a dead lane contributes only zeros, which are excluded by
+  default — but it stops them inflating lane counts and the "Zero readings"
+  figure. Judging this over eight months rather than one is a real improvement:
+  a lane gets 250,000 chances to show it works instead of 30,000.
+- **13 sites where every lane is dead** are treated as stuck and excluded
   outright, but kept in the inventory so the exclusion stays reportable rather
   than the site silently vanishing from the totals.
 
-- **7 sensors are not watching through traffic.** They sit pinned under 3 km/h
-  for the fifteen hours from 07:00 to 22:00, then report 9–26 km/h at 3am. Real
-  congestion clears by late evening; theirs never does. Their free-flow
-  references corroborate it: 12–14 km/h where the other twenty sensors along
-  Av Italia see a median of 45. Most are probably turn lanes, bus bays or
+- **7 sensors are not watching through traffic.** They sit pinned at 1.6–2.9 km/h
+  for the fifteen hours from 07:00 to 22:00, then report 9.7–29.7 km/h at 3am.
+  Real congestion clears by late evening; theirs never does. Their free-flow
+  references corroborate it: 4–23 km/h where the other sensors along the same
+  avenues see a median around 45. Most are probably turn lanes, bus bays or
   permanently occupied queues — real places, but not the road they are named
   after. Detected as `day_speed < 3 km/h AND night_speed > 3 × day_speed`,
   measured on weekdays, since weekend mornings dilute the daytime window enough
   to hide one of the seven. Excluded from every view, including the city curve —
-  a detector stuck at 1.9 km/h all month would otherwise drag it down.
-- **Congestion is a ratio**, so it is left undefined rather than faked for the 3
+  a detector stuck at 1.9 km/h all year would otherwise drag it down.
+- **Congestion is a ratio**, so it is left undefined rather than faked for the 5
   sensors whose free-flow reference is under 10 km/h — at that scale the ±0.5
   km/h rounding is already worth 5%. This is what stopped a sensor crawling at
-  1 km/h from being drawn as "0% congested".
+  4 km/h from being drawn as "0% congested".
 
-Of 442 sites, **404 are mappable** at a typical rush-hour slice:
-442 − 16 stuck − 7 stalled − 13 unlocatable = 406, of which 404 clear the
-minimum-readings floor.
+Of 480 sites, **415 are mappable** at a typical rush-hour slice:
+480 − 13 stuck − 7 stalled − 41 unlocatable = 419, of which 415 clear the
+20-reading floor.
 
 Street names in the source are inconsistent (`Bv Artigas` vs `Bv. Artgias`,
 `Bv Espana` vs `Bv. España`, trailing spaces). The ETL trims whitespace but does
 not attempt to merge misspellings, so a few streets appear twice in the
 comparison picker.
 
+### The bug that a multi-month panel exists to hit
+
+Stitching months together sounds like concatenation. It is not, and the reason is
+the sharpest example this dataset has yet produced of a failure that does not
+crash.
+
+**The publisher changed coordinate precision between March and April 2026.**
+January to March carry up to eight decimal places; April onward carry exactly
+six. A sensor keyed on `(lat, lon, street, from, to)` — which is how site
+identity worked when the app read one file — therefore splits in two. Not
+approximately: exactly 120 sensors become 240, each holding part of the year,
+each computing its own "lifetime" free-flow speed from three or five months.
+
+Nothing errors. The map grows a second dot per affected sensor, the site count
+rises from 480 to 646, and every congestion figure on those sensors is quietly
+measured against a reference built from a fraction of the data. It would have
+looked entirely plausible.
+
+The fix is to round to six decimals before forming the key, and the *value* is
+fixed by arithmetic rather than tuned until the output looked right:
+
+- Rounding to 6 dp moves a coordinate by at most 0.5 × 10⁻⁶°, which is **5.6 cm**
+  in latitude and 4.6 cm in longitude here. Two spellings of one point can be at
+  most ~7.3 cm apart. Measured worst case across the eight files: **6.9 cm**.
+- Two *distinct* 6-dp coordinates differ by at least 10⁻⁶°, which is **11.1 cm**.
+  Measured closest pair of genuinely different sites reporting in the same month:
+  **11.1 cm**.
+
+The artifact is strictly smaller than the smallest real separation, so rounding
+cannot merge two sensors that are actually different. The independent check is
+that of the 120 coordinate pairs the rounding merges, **none ever reported in the
+same month** — two sites present in one month are distinct by construction, so a
+single overlap would have falsified the whole argument.
+
+What remains after the fix is real: 85 of 480 sites do not report in all eight
+months, because sensors were installed, removed, or given a genuine coordinate
+part-way through the year. The app says so rather than presenting a partial
+reference as a yearly one.
+
 ## How the numbers are computed
 
 The ETL aggregates to 30-minute buckets but stores **sums and counts, not
-averages**, so every mean the app computes later — over any set of days, hours,
-or streets — is exact rather than an average of averages. A "site" is one
+averages**, so every mean the app computes later — over any set of months, days,
+hours, or streets — is exact rather than an average of averages. A "site" is one
 physical measuring point; the raw file has one row per *lane*, and several lane
-detectors share a coordinate. Of 908 lane detectors that reported anything usable,
-871 survive the dead-lane test, and they sit at 442 sites.
+detectors share a coordinate. Of 984 lane detectors that reported anything usable,
+954 survive the dead-lane test, and they sit at 480 sites.
 
 Free-flow speed per sensor is its 85th-percentile non-zero reading, the standard
-traffic-engineering proxy — robust to both jams and the occasional speeder.
+traffic-engineering proxy — robust to both jams and the occasional speeder. It is
+computed **across every ingested month**, as are each sensor's own mean and its
+day/night contrast, so congestion means the same thing in January and in August.
+
+That percentile is taken from a per-lane **histogram** rather than from the
+readings themselves. Speeds in this feed are whole km/h and capped at 120, so 121
+counts per lane carry the entire distribution exactly — which turns a percentile
+over 53 million readings into one over about 120,000 rows, with no sampling and
+no approximation. The hand-written weighted-quantile SQL is checked against
+DuckDB's own `quantile_cont` in the tests, including ties, single readings and
+both extremes, because a percentile quietly a few percent off would still look
+completely plausible on the map.
+
+The rain penalty is **stratified by time of day**: differences are taken within
+each half-hour bucket and only then averaged, weighted by how much wet data each
+bucket has. See the rain section above for why, and `tests/test_weather_crossing.py`
+for a panel where the unstratified answer comes out with the opposite sign.
 
 ## Layout
 
 ```
 src/mvdspeed/
   config.py   paths, cleaning thresholds, surface parameters, palette
-  etl.py      CSV -> parquet (duckdb)
-  data.py     loading and slicing
+  fetch.py    CKAN catalogue -> monthly archives in data/raw
+  etl.py      monthly archives -> parquet (duckdb), panel-wide references
+  weather.py  INUMET hourly observations -> weather.parquet
+  data.py     loading and slicing, including the rain crossing
   surface.py  kernel-weighted heat surface over the point sensors
   streets.py  sensor -> road matching, and the three reach models
   osm.py      one-off Overpass fetch -> data/streets.parquet
   colors.py   value -> colour scales and legends
   app.py      the Streamlit dashboard
+tests/
+  test_fetch.py            month-name parsing across the feed's spellings
+  test_etl.py              the histogram quantile, against quantile_cont
+  test_weather_crossing.py the rain stratification, on known answers
 ```
 
 ## Visual design notes
@@ -302,7 +451,25 @@ meaningful, where a density cloud could not carry a sign at all.
 
 ## Caveats
 
-- 11 days of one winter month is not a seasonal baseline.
+- Seven and a half months is not a seasonal baseline either. It covers one
+  Southern-Hemisphere summer and part of one winter, with no second year to tell
+  a seasonal pattern from a one-off. January looks fast because Montevideo goes
+  on holiday, but this panel cannot prove that is what January does.
+- 85 of 480 sites do not report in all eight months, so a month-to-month
+  difference is partly a change in the city and partly a change in which sensors
+  were watching. The month table carries the sensor counts for that reason.
+- **The rain crossing is one station.** INUMET has exactly one in Montevideo,
+  ~10 km northwest of the middle of the sensor field. Frontal rain covering the
+  whole city is measured well; a convective cell over one avenue may be recorded
+  when that avenue stayed dry, or missed when it did not. That error is
+  uncorrelated with traffic, so it dilutes the measured penalty toward zero
+  rather than inventing one — the real effect is probably a little larger than
+  −0.92 km/h, not smaller.
+- Weather is hourly against 30-minute buckets, so both halves of an hour inherit
+  its rainfall: rain starting at 10:40 is credited to all of 10:00–11:00.
+- **The rain figure is an association, not a causal estimate.** Rain arrives with
+  wind, cloud, and different traffic volumes, and none of those are held fixed.
+  Time of day and day-of-week are; nothing else is.
 - Sensors sit at intersections on monitored corridors, so coverage is not
   uniform across the city — absence of dots is not absence of congestion.
 - The surface is an average, so it softens the extremes: cell values span
@@ -316,7 +483,7 @@ meaningful, where a density cloud could not carry a sign at all.
   inside the cutoff. The Rambla rounding Punta Carretas is the case where it
   does, and a sensor there reaches slightly across the point rather than around
   it.
-- 14 of the 406 mappable sensors match no road and appear only as dots. They are
+- 15 of the 419 mappable sensors match no road and appear only as dots. They are
   mostly slip roads and tunnel approaches that the feed names as streets.
 - `data/streets.parquet` is a snapshot of OSM taken in May 2026. Nothing breaks
   as the city changes; corridors just stop reflecting recent roadworks.

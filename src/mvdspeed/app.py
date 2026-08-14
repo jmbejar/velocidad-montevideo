@@ -15,7 +15,11 @@ import streamlit as st
 
 from mvdspeed import colors, data as mvd, streets, surface
 from mvdspeed.config import (
+    ACCENT,
     BUCKET_MINUTES,
+    DE_EMPHASIS,
+    DIVERGING_COOL,
+    DIVERGING_WARM,
     GRIDLINE,
     MAX_PLAUSIBLE_SPEED,
     STREET_ALPHA_GAMMA,
@@ -41,7 +45,7 @@ from mvdspeed.config import (
 )
 
 st.set_page_config(
-    page_title="Velocidad promedio · Montevideo · Agosto 2026",
+    page_title="Velocidad promedio · Montevideo · 2026",
     page_icon="🚗",
     layout="wide",
 )
@@ -182,12 +186,14 @@ def load_streets() -> tuple[pd.DataFrame, pd.Series]:
 @st.cache_data(show_spinner=False)
 def sites_at(
     _key: tuple, dows: tuple[int, ...], buckets: tuple[int, ...], include_zeros: bool,
-    min_samples: int,
+    min_samples: int, months: tuple[str, ...], rain: str | None,
 ) -> pd.DataFrame:
     return mvd.by_site(
         load_data(),
         dows=list(dows),
         buckets=list(buckets),
+        months=list(months),
+        rain=rain,
         include_zeros=include_zeros,
         min_samples=min_samples,
     )
@@ -196,7 +202,8 @@ def sites_at(
 @st.cache_data(show_spinner=False)
 def surface_for(
     _key: tuple, dows: tuple[int, ...], buckets: tuple[int, ...], include_zeros: bool,
-    min_samples: int, column: str, _metric_name: str,
+    min_samples: int, months: tuple[str, ...], rain: str | None, column: str,
+    _metric_name: str,
 ) -> surface.Surface:
     """The kernel surface for one slice. Cached so the ▶ Play loop stays smooth.
 
@@ -204,14 +211,15 @@ def surface_for(
     ramp is applied afterwards, so switching light/dark reuses the same grid.
     """
     return surface.kernel_surface(
-        sites_at(_key, dows, buckets, include_zeros, min_samples), column
+        sites_at(_key, dows, buckets, include_zeros, min_samples, months, rain), column
     )
 
 
 @st.cache_data(show_spinner=False)
 def street_field_for(
     _key: tuple, dows: tuple[int, ...], buckets: tuple[int, ...], include_zeros: bool,
-    min_samples: int, column: str, mode: str, _metric_name: str,
+    min_samples: int, months: tuple[str, ...], rain: str | None, column: str,
+    mode: str, _metric_name: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Value and support per road chunk for one slice, cached like the surface.
 
@@ -219,21 +227,76 @@ def street_field_for(
     reason `surface_for` is: the ramp is applied afterwards.
     """
     chunks, assigned = load_streets()
-    frame = sites_at(_key, dows, buckets, include_zeros, min_samples)
+    frame = sites_at(_key, dows, buckets, include_zeros, min_samples, months, rain)
     frame = frame.assign(corridor_id=frame["site_id"].map(assigned))
     return streets.street_field(chunks, frame, column, mode=mode)
 
 
 @st.cache_data(show_spinner=False)
-def profile(_key: tuple, dows: tuple[int, ...], include_zeros: bool) -> pd.DataFrame:
-    return mvd.city_profile(load_data(), dows=list(dows), include_zeros=include_zeros)
+def profile(
+    _key: tuple, dows: tuple[int, ...], include_zeros: bool,
+    months: tuple[str, ...], rain: str | None,
+) -> pd.DataFrame:
+    return mvd.city_profile(
+        load_data(), dows=list(dows), months=list(months), rain=rain,
+        include_zeros=include_zeros,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def month_curves(
+    _key: tuple, dows: tuple[int, ...], include_zeros: bool,
+    months: tuple[str, ...], rain: str | None,
+) -> pd.DataFrame:
+    return mvd.month_profile(
+        load_data(), dows=list(dows), months=list(months), rain=rain,
+        include_zeros=include_zeros,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def months_table(_key: tuple, dows: tuple[int, ...], include_zeros: bool) -> pd.DataFrame:
+    return mvd.month_summary(load_data(), dows=list(dows), include_zeros=include_zeros)
+
+
+@st.cache_data(show_spinner=False)
+def rain_curves(
+    _key: tuple, dows: tuple[int, ...], include_zeros: bool,
+    months: tuple[str, ...], min_samples: int,
+) -> pd.DataFrame:
+    return mvd.rain_profile(
+        load_data(), dows=list(dows), months=list(months),
+        include_zeros=include_zeros, min_samples=min_samples,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def rain_by(
+    _key: tuple, dows: tuple[int, ...], include_zeros: bool,
+    months: tuple[str, ...], min_samples: int, by: str,
+) -> pd.DataFrame:
+    return mvd.rain_penalty(
+        load_data(), dows=list(dows), months=list(months),
+        include_zeros=include_zeros, min_samples=min_samples, by=by,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def rain_summary(
+    _key: tuple, dows: tuple[int, ...], include_zeros: bool, months: tuple[str, ...]
+) -> dict[str, float]:
+    return mvd.rain_headline(
+        load_data(), dows=list(dows), months=list(months), include_zeros=include_zeros
+    )
 
 
 @st.cache_data(show_spinner=False)
 def street_curves(_key: tuple, names: tuple[str, ...], dows: tuple[int, ...],
-                  include_zeros: bool) -> pd.DataFrame:
+                  include_zeros: bool, months: tuple[str, ...],
+                  rain: str | None) -> pd.DataFrame:
     return mvd.street_profile(
-        load_data(), dows=list(dows), streets=list(names), include_zeros=include_zeros
+        load_data(), dows=list(dows), streets=list(names), months=list(months),
+        rain=rain, include_zeros=include_zeros,
     )
 
 
@@ -290,9 +353,44 @@ with st.sidebar:
         )
         st.caption(REACH_MODELS[reach_name]["help"])
 
-    st.subheader("Days")
+    st.subheader("When")
+    all_months = dataset.months
+    chosen_months = st.multiselect(
+        "Months",
+        all_months,
+        default=all_months,
+        format_func=mvd.month_label,
+        help=(
+            "Which of the published months the map and the curves are built from. "
+            "The per-sensor references they are measured against — free-flow "
+            "speed, each sensor's own average — are always computed over the whole "
+            "panel, so narrowing this compares a month to the year rather than to "
+            "itself."
+        ),
+    )
+    if not chosen_months:
+        st.warning("Pick at least one month.")
+        st.stop()
+    months = tuple(chosen_months)
+
     scope_name = st.radio("Day scope", list(mvd.DAY_SCOPES), index=0)
     dows = tuple(mvd.DAY_SCOPES[scope_name])
+
+    if dataset.has_weather:
+        rain_name = st.radio(
+            "Weather",
+            list(mvd.RAIN_SCOPES),
+            index=0,
+            help=(
+                "Narrows every view to hours matching the weather at INUMET's "
+                "Aeropuerto Melilla station. “Dry roads only” also excludes the "
+                "two hours after rain stops, since the road is still wet."
+            ),
+        )
+        rain = mvd.RAIN_SCOPES[rain_name]
+    else:
+        rain_name, rain = "Any weather", None
+        st.caption("No weather data — run `uv run mvdspeed-weather` to add it.")
 
     st.subheader("Method")
     include_zeros = st.checkbox(
@@ -319,9 +417,17 @@ with st.sidebar:
     )
 
     st.divider()
+    span = (
+        mvd.month_label(all_months[0])
+        if len(all_months) == 1
+        else f"{mvd.month_label(all_months[0])} – {mvd.month_label(all_months[-1])}"
+    )
+    source = f"Source: Montevideo open data, {span}."
+    if dataset.has_weather:
+        source += " Weather: INUMET, Aeropuerto Melilla."
     st.caption(
-        f"Source: Montevideo open data, Aug 2026. Readings above "
-        f"{MAX_PLAUSIBLE_SPEED} km/h and empty readings are dropped by the ETL."
+        f"{source} Readings above {MAX_PLAUSIBLE_SPEED} km/h and empty readings "
+        "are dropped by the ETL."
     )
 
 # The page itself is always the light theme (see .streamlit/config.toml), so the
@@ -334,11 +440,15 @@ map_surface = SURFACE_DARK if dark_map else SURFACE_LIGHT
 basemap = pdk.map_styles.CARTO_DARK if dark_map else pdk.map_styles.CARTO_LIGHT
 
 # --- header & time control ----------------------------------------------------
-st.title("Velocidad promedio · Montevideo · Agosto 2026")
+st.title(f"Velocidad promedio · Montevideo · {span}")
+subtitle = (
+    f"{len(dataset.sites)} measuring points · {len(dataset.dates)} days · "
+    f"{len(all_months)} months · {BUCKET_MINUTES}-minute resolution"
+)
+if dataset.has_weather:
+    subtitle += " · crossed with hourly rainfall"
 st.markdown(
-    f"<p style='color:{TEXT_MUTED};margin-top:-0.6rem'>"
-    f"{len(dataset.sites)} measuring points · "
-    f"{len(dataset.dates)} days · {BUCKET_MINUTES}-minute resolution</p>",
+    f"<p style='color:{TEXT_MUTED};margin-top:-0.6rem'>{subtitle}</p>",
     unsafe_allow_html=True,
 )
 
@@ -368,13 +478,28 @@ window_label = "all day" if all_day else (
     f"{mvd.bucket_label(selected)}–{mvd.bucket_label((selected + 1) % BUCKETS)}"
 )
 
-frame = sites_at(CACHE_KEY, dows, buckets, include_zeros, min_samples)
-day_profile = profile(CACHE_KEY, dows, include_zeros)
+# What the current slice covers beyond the time of day, for the headings. Only
+# the parts that are *narrower* than the whole panel are named, so the default
+# view stays uncluttered.
+scope_bits = []
+if len(months) < len(all_months):
+    scope_bits.append(
+        mvd.month_label(months[0])
+        if len(months) == 1
+        else f"{len(months)} months"
+    )
+if rain is not None:
+    scope_bits.append(rain_name.lower())
+scope_suffix = f" · {' · '.join(scope_bits)}" if scope_bits else ""
+
+frame = sites_at(CACHE_KEY, dows, buckets, include_zeros, min_samples, months, rain)
+day_profile = profile(CACHE_KEY, dows, include_zeros, months, rain)
 
 if frame.empty:
     st.warning(
         "No sensor reported enough readings for this combination. "
-        "Lower the minimum-readings threshold or widen the day scope."
+        "Lower the minimum-readings threshold, widen the day scope, add months, "
+        "or loosen the weather filter."
     )
     st.stop()
 
@@ -421,8 +546,8 @@ kpi[3].metric(
 notes = []
 if dataset.n_flatlined:
     notes.append(
-        f"{dataset.n_flatlined} sensor(s) never recorded moving traffic all month "
-        "and are excluded as stuck"
+        f"{dataset.n_flatlined} sensor(s) never recorded moving traffic in any "
+        "month and are excluded as stuck"
     )
 if dataset.n_stalled:
     notes.append(
@@ -445,6 +570,17 @@ if n_no_metric:
     notes.append(
         f"{n_no_metric} hidden here for having no usable free-flow reference "
         "(under 10 km/h, too small to form a ratio)"
+    )
+if dataset.n_partial_panel:
+    notes.append(
+        f"{dataset.n_partial_panel} did not report in all {len(all_months)} months — "
+        "sensors installed, removed, or given a real coordinate part-way through the "
+        "year — so a month-to-month change is partly a change in who was watching"
+    )
+if rain is not None and dataset.n_weather_gaps:
+    notes.append(
+        f"the weather station missed {dataset.n_weather_gaps} hours, which are left "
+        "out of every weather filter rather than counted as dry"
     )
 if show_streets:
     n_unmatched = int(frame["site_id"].map(load_streets()[1]).isna().sum())
@@ -518,7 +654,8 @@ frame["detail"] = detail
 layers = []
 if layer_choice in ("Surface + sensors", "Surface only"):
     field = surface_for(
-        CACHE_KEY, dows, buckets, include_zeros, min_samples, column, metric_name
+        CACHE_KEY, dows, buckets, include_zeros, min_samples, months, rain, column,
+        metric_name,
     )
     if field.n_supported:
         flat = pd.Series(field.values.ravel())
@@ -567,7 +704,7 @@ if layer_choice in ("Surface + sensors", "Surface only"):
 if show_streets:
     chunks, _ = load_streets()
     values, support = street_field_for(
-        CACHE_KEY, dows, buckets, include_zeros, min_samples, column,
+        CACHE_KEY, dows, buckets, include_zeros, min_samples, months, rain, column,
         REACH_MODELS[reach_name]["mode"], metric_name,
     )
     painted = np.isfinite(values)
@@ -703,12 +840,17 @@ elif layer_choice != "Sensors only":
     )
 
 # --- time-of-day profile -----------------------------------------------------
-st.subheader("How the whole city moves through the day")
+st.subheader(f"How the whole city moves through the day{scope_suffix}")
 
-def make_axis(**overrides) -> alt.Axis:
-    """Recessive hairline grid and muted labels, per the chart-chrome rules."""
+def make_axis(grid: bool = True, **overrides) -> alt.Axis:
+    """Recessive hairline grid and muted labels, per the chart-chrome rules.
+
+    `grid` is a named parameter rather than one more override because the bar
+    chart's category axis wants it off, and passing it through `**overrides`
+    collides with the default set here.
+    """
     return alt.Axis(
-        grid=True, gridColor=GRIDLINE, gridWidth=1, domainColor=GRIDLINE,
+        grid=grid, gridColor=GRIDLINE, gridWidth=1, domainColor=GRIDLINE,
         tickColor=GRIDLINE, labelColor=TEXT_MUTED, titleColor=ink_secondary,
         **overrides,
     )
@@ -751,6 +893,329 @@ if not all_day:
         f"{day_profile['speed'].max():.1f} km/h at "
         f"{day_profile.loc[day_profile['speed'].idxmax(), 'time']}."
     )
+
+# --- month over month ---------------------------------------------------------
+# Two charts rather than one, because there are two questions and they want
+# different forms. "Which month was slower" is a magnitude comparison, so it is
+# bars. "Did the shape of the day change" needs the curves superimposed -- but
+# eight curves cannot be told apart by colour (see DE_EMPHASIS in config), so
+# that one is an emphasis chart: the month you are asking about against the rest
+# of the year as context.
+#
+# Gated on how many months are *selected*, not how many exist: with one month
+# picked there is nothing to compare it against, and the section would otherwise
+# render a single zero-length bar against its own average and announce a spread
+# of 0.0 km/h.
+if len(months) > 1:
+    st.subheader("Month against month")
+    summary = months_table(CACHE_KEY, dows, include_zeros)
+    summary = summary[summary["month"].isin(months)]
+
+    level, shape = st.columns([1, 1.35], gap="large")
+    with level:
+        # Plotted as a difference from the year rather than as absolute km/h.
+        # Bar length encodes magnitude, so a bar axis has to start at its zero --
+        # and from a zero baseline every month is a 30 km/h bar and the 1.1 km/h
+        # that separates them is invisible. Making the baseline the year's own
+        # average keeps a real zero *and* shows the differences at full size. It
+        # also turns the chart into the question actually being asked: which
+        # months ran against the year, and by how much.
+        overall = (summary["speed"] * summary["samples"]).sum() / summary[
+            "samples"
+        ].sum()
+        level_frame = summary.assign(delta=summary["speed"] - overall)
+        # Two classes rather than a continuous shade. The bar's length and side
+        # already carry the magnitude, so colour only has to carry the sign --
+        # and this is the same warm/cool pair the rest of the app uses for
+        # "slower / faster than typical", validated at OKLab dE 23.8 under
+        # protanopia.
+        level_frame["direction"] = [
+            "Slower than the year" if d < 0 else "Faster than the year"
+            for d in level_frame["delta"]
+        ]
+        st.markdown(f"**Against the {overall:.1f} km/h average**")
+        # Floored: with one month selected every delta is exactly zero, and a
+        # zero-width domain collapses the axis into a single point.
+        limit = max(float(level_frame["delta"].abs().max()) * 1.45, 0.1)
+        bars = (
+            alt.Chart(level_frame)
+            .mark_bar(cornerRadiusEnd=4, size=18)
+            .encode(
+                # labelOverlap=False: Altair drops every other category label
+                # when the band gets tight, and a bar chart with half its months
+                # unlabelled is unreadable rather than merely tidy.
+                y=alt.Y("label:N", title=None, sort=list(summary["label"]),
+                        axis=make_axis(grid=False, labelOverlap=False)),
+                x=alt.X("delta:Q", title="km/h vs the year",
+                        scale=alt.Scale(domain=[-limit, limit], nice=False),
+                        axis=axis),
+                color=alt.Color(
+                    "direction:N", title=None,
+                    scale=alt.Scale(
+                        domain=["Slower than the year", "Faster than the year"],
+                        range=[DIVERGING_WARM, DIVERGING_COOL],
+                    ),
+                    legend=alt.Legend(orient="top", labelColor=ink_secondary),
+                ),
+                tooltip=[
+                    alt.Tooltip("label:N", title="Month"),
+                    alt.Tooltip("speed:Q", title="Mean km/h", format=".2f"),
+                    alt.Tooltip("delta:Q", title="vs the year", format="+.2f"),
+                    alt.Tooltip("worst_time:N", title="Slowest half hour"),
+                    alt.Tooltip("worst_speed:Q", title="…at km/h", format=".1f"),
+                    alt.Tooltip("n_sites:Q", title="Sensors", format=","),
+                    alt.Tooltip("n_days:Q", title="Days", format=","),
+                ],
+            )
+        )
+        # Labelled outside the bar end and away from the axis, so a short bar
+        # still carries its number and nothing overlaps the zero rule.
+        labels = bars.mark_text(
+            align=alt.expr("datum.delta < 0 ? 'right' : 'left'"),
+            dx=alt.expr("datum.delta < 0 ? -5 : 5"),
+            color=TEXT_SECONDARY, fontSize=11,
+        ).encode(text=alt.Text("speed:Q", format=".1f"), color=alt.value(TEXT_SECONDARY))
+        zero_rule = (
+            alt.Chart(pd.DataFrame({"x": [0.0]}))
+            .mark_rule(color=TEXT_MUTED, strokeWidth=1)
+            .encode(x="x:Q")
+        )
+        st.altair_chart(
+            (bars + zero_rule + labels)
+            .properties(height=max(180, 38 * len(summary)), background=chart_surface)
+            .configure_view(strokeWidth=0),
+            use_container_width=True,
+        )
+
+    with shape:
+        focus_options = list(months)
+        st.markdown("**The shape of the day**")
+        focus = st.selectbox(
+            "Highlight", focus_options, index=len(focus_options) - 1,
+            format_func=mvd.month_label, label_visibility="collapsed",
+            help="The rest of the year stays on the chart in gray, as the "
+                 "comparison this month is being read against.",
+        )
+        month_frame = month_curves(CACHE_KEY, dows, include_zeros, months, rain)
+        focus_label = mvd.month_label(focus)
+        month_frame = month_frame.assign(
+            series=lambda f: f["label"].where(f["month"] == focus, "Other months")
+        )
+        # Two classes, not eight: the highlighted month and everything else. The
+        # gray is de-emphasis furniture rather than a second series colour, which
+        # is why it is allowed to sit below the chroma floor.
+        series_scale = alt.Scale(
+            domain=[focus_label, "Other months"], range=[ACCENT, DE_EMPHASIS]
+        )
+        month_chart = (
+            alt.Chart(month_frame)
+            .mark_line(strokeWidth=2)
+            .encode(
+                x=alt.X("hour:Q", title="Hour of day",
+                        scale=alt.Scale(domain=[0, 24], nice=False), axis=hour_axis),
+                y=alt.Y("speed:Q", title="km/h",
+                        scale=alt.Scale(zero=False), axis=axis),
+                color=alt.Color("series:N", title=None, scale=series_scale,
+                                legend=alt.Legend(orient="top",
+                                                  labelColor=ink_secondary)),
+                # Without this the gray months are drawn as one zig-zagging path.
+                detail=alt.Detail("month:N"),
+                # The highlighted month on top of its own context.
+                order=alt.Order("series:N", sort="descending"),
+                opacity=alt.condition(
+                    alt.datum.series == focus_label, alt.value(1.0), alt.value(0.75)
+                ),
+                tooltip=[
+                    alt.Tooltip("label:N", title="Month"),
+                    alt.Tooltip("time:N", title="Time"),
+                    alt.Tooltip("speed:Q", title="km/h", format=".1f"),
+                    alt.Tooltip("n_sites:Q", title="Sensors", format=","),
+                    alt.Tooltip("samples:Q", title="Readings", format=","),
+                ],
+            )
+        )
+        st.altair_chart(
+            month_chart.properties(
+                height=max(180, 38 * len(summary)), background=chart_surface
+            ).configure_view(strokeWidth=0),
+            use_container_width=True,
+        )
+
+    fastest = summary.loc[summary["speed"].idxmax()]
+    slowest = summary.loc[summary["speed"].idxmin()]
+    st.caption(
+        f"Fastest month is {fastest['label']} at {fastest['speed']:.1f} km/h, "
+        f"slowest {slowest['label']} at {slowest['speed']:.1f} km/h — a spread of "
+        f"{fastest['speed'] - slowest['speed']:.1f} km/h across the year, against a "
+        f"gap of roughly 20 km/h between the quietest and busiest hour of a single "
+        f"day. The month matters far less than the hour. Every month is measured "
+        f"against the same per-sensor references, so these are on one footing; they "
+        f"are not made of quite the same sensors, which the table records."
+    )
+    with st.expander("Month by month, in numbers"):
+        table = summary.assign(
+            worst=lambda f: f["worst_speed"].round(1).astype(str)
+            + " at " + f["worst_time"]
+        )[["label", "speed", "worst", "n_sites", "n_days", "samples"]]
+        st.dataframe(
+            table.rename(
+                columns={
+                    "label": "Month", "speed": "Mean km/h",
+                    "worst": "Slowest half hour", "n_sites": "Sensors",
+                    "n_days": "Days", "samples": "Readings",
+                }
+            ),
+            hide_index=True, use_container_width=True,
+            column_config={
+                "Mean km/h": st.column_config.NumberColumn(format="%.2f"),
+                "Readings": st.column_config.NumberColumn(format="%d"),
+            },
+        )
+        st.caption(
+            "Days counts only those matching the selected day scope, so a month "
+            "with a public holiday shows fewer. August is a partial month: the "
+            "feed publishes it while it is still running."
+        )
+elif len(all_months) > 1:
+    st.info(
+        f"Showing {mvd.month_label(months[0])} alone. Add a month in the sidebar "
+        "to compare it against the rest of the year."
+    )
+
+# --- rain ---------------------------------------------------------------------
+if dataset.has_weather:
+    st.subheader("What rain costs")
+    headline = rain_summary(CACHE_KEY, dows, include_zeros, months)
+    if not headline:
+        st.info(
+            "Not enough paired wet and dry hours in this selection to compare. "
+            "Add months or widen the day scope."
+        )
+    else:
+        rain_kpi = st.columns(4)
+        rain_kpi[0].metric(
+            "Speed in the rain",
+            f"{headline['delta']:+.2f} km/h",
+            delta=f"{headline['pct']:+.1%} vs dry",
+            delta_color="inverse",
+            help=(
+                "Difference between wet and dry hours, taken inside each half-hour "
+                "bucket and then averaged, so it is not an artefact of rain "
+                "falling at different times of day."
+            ),
+        )
+        rain_kpi[1].metric(
+            "Dry baseline", f"{headline['dry_speed']:.1f} km/h",
+            help="Excludes the two hours after rain stops, when the road is still wet.",
+        )
+        rain_kpi[2].metric(
+            "Without stratifying", f"{headline['naive_delta']:+.2f} km/h",
+            help=(
+                "The same comparison pooling all hours together. Shown because the "
+                "gap between it and the figure on the left is what the stratifying "
+                "buys — pooling makes rain look worse than it is."
+            ),
+        )
+        rain_kpi[3].metric(
+            "Wet readings", f"{headline['wet_samples']:,.0f}",
+            help=(
+                f"Against {headline['dry_samples']:,.0f} dry. Rain is rare — about "
+                "5% of hours — so the wet side is always the thinner one."
+            ),
+        )
+
+        rain_frame = rain_curves(CACHE_KEY, dows, include_zeros, months, min_samples)
+        wet_dry, penalty_by = st.columns([1.15, 1], gap="large")
+        with wet_dry:
+            st.markdown("**Through the day, wet against dry**")
+            if rain_frame.empty:
+                st.info("No bucket has enough readings in both conditions.")
+            else:
+                # Two conditions, so the diverging pair rather than two arbitrary
+                # hues: dry is the cool reference, wet the warm departure.
+                band_scale = alt.Scale(
+                    domain=["Dry", "Wet"], range=[DIVERGING_COOL, DIVERGING_WARM]
+                )
+                st.altair_chart(
+                    alt.Chart(rain_frame)
+                    .mark_line(strokeWidth=2)
+                    .encode(
+                        x=alt.X("hour:Q", title="Hour of day",
+                                scale=alt.Scale(domain=[0, 24], nice=False),
+                                axis=hour_axis),
+                        y=alt.Y("speed:Q", title="km/h",
+                                scale=alt.Scale(zero=False), axis=axis),
+                        color=alt.Color("band:N", title=None, scale=band_scale,
+                                        legend=alt.Legend(orient="top",
+                                                          labelColor=ink_secondary)),
+                        tooltip=[
+                            alt.Tooltip("band:N", title="Roads"),
+                            alt.Tooltip("time:N", title="Time"),
+                            alt.Tooltip("speed:Q", title="km/h", format=".1f"),
+                            alt.Tooltip("samples:Q", title="Readings", format=","),
+                        ],
+                    )
+                    .properties(height=260, background=chart_surface)
+                    .configure_view(strokeWidth=0),
+                    use_container_width=True,
+                )
+                gap = rain_frame.pivot(index="hour", columns="band", values="speed")
+                if {"Dry", "Wet"} <= set(gap.columns):
+                    gap = gap.dropna()
+                    gap["delta"] = gap["Wet"] - gap["Dry"]
+                    worst_hour = gap["delta"].idxmin()
+                    st.caption(
+                        f"The two lines are closest overnight and furthest apart at "
+                        f"{mvd.bucket_label(int(round(worst_hour * 60 / BUCKET_MINUTES)))}"
+                        f", where wet roads run {abs(gap['delta'].min()):.1f} km/h "
+                        f"slower. Rain costs most when there is already traffic to "
+                        f"slow down."
+                    )
+        with penalty_by:
+            st.markdown("**Where rain costs most**")
+            grain = st.radio(
+                "Grain", ["By avenue", "By stretch"], horizontal=True,
+                label_visibility="collapsed",
+            )
+            pen = rain_by(
+                CACHE_KEY, dows, include_zeros, months, min_samples,
+                "street" if grain == "By avenue" else "tramo",
+            )
+            key = "street" if grain == "By avenue" else "tramo"
+            if pen.empty:
+                st.info("Nothing has enough readings in both conditions here.")
+            else:
+                worst_rain = pen.head(10).copy()
+                worst_rain["pct_v"] = worst_rain["pct"] * 100
+                st.dataframe(
+                    worst_rain[[key, "delta", "pct_v", "dry_speed", "wet_samples"]]
+                    .rename(
+                        columns={
+                            key: "Avenue" if key == "street" else "Stretch",
+                            "delta": "km/h lost", "pct_v": "% lost",
+                            "dry_speed": "Dry km/h", "wet_samples": "Wet readings",
+                        }
+                    ),
+                    hide_index=True, use_container_width=True, height=300,
+                    column_config={
+                        "km/h lost": st.column_config.NumberColumn(format="%.2f"),
+                        "% lost": st.column_config.NumberColumn(format="%.1f%%"),
+                        "Dry km/h": st.column_config.NumberColumn(format="%.1f"),
+                        "Wet readings": st.column_config.NumberColumn(format="%d"),
+                    },
+                )
+                n_positive = int((pen["delta"] > 0).sum())
+                st.caption(
+                    f"{len(pen)} {'avenues' if key == 'street' else 'stretches'} have "
+                    f"enough data in both conditions; {n_positive} of them come out "
+                    f"*faster* in the rain. Some of that is thinner traffic, and some "
+                    f"is that a handful of wet half hours is a small sample — raise "
+                    f"the minimum-readings slider to see which survive."
+                )
+
+    with st.expander("How to read the rain numbers"):
+        for caveat in mvd.weather_caveats():
+            st.markdown(f"- {caveat}")
 
 # --- rankings & street comparison --------------------------------------------
 left, right = st.columns(2, gap="large")
@@ -798,7 +1263,9 @@ with right:
         help="Up to three, so every line stays tellable apart under colour-vision deficiency.",
     )
     if chosen:
-        street_frame = street_curves(CACHE_KEY, tuple(chosen), dows, include_zeros)
+        street_frame = street_curves(
+            CACHE_KEY, tuple(chosen), dows, include_zeros, months, rain
+        )
         # Slots 1-3 of the categorical theme, stepped for the active surface.
         # These three are the set that clears the all-pairs colour-vision gates.
         # The chart surface is always light, so these are the light steps.

@@ -13,12 +13,150 @@ DATA_OSM = PROJECT_ROOT / "data" / "osm"
 # ETL outputs
 MEASUREMENTS_PARQUET = DATA_PROCESSED / "measurements.parquet"
 DETECTORS_PARQUET = DATA_PROCESSED / "detectors.parquet"
+WEATHER_PARQUET = DATA_PROCESSED / "weather.parquet"
 
 # Road geometry. Unlike the parquet above this is committed: it is small, it
 # changes only when OSM does, and the app's one network dependency should stay
 # the basemap CDN. The raw Overpass responses under data/osm/ are the cache it
 # is built from and are not committed.
 STREETS_PARQUET = PROJECT_ROOT / "data" / "streets.parquet"
+
+# --- Source catalogue --------------------------------------------------------
+# The monthly files are enumerated through CKAN's package_show, not by scraping
+# the dataset page and not by guessing URLs. Both alternatives break on things
+# the catalogue actually does:
+#
+#   - The filenames change era to era. The 2021 files are named
+#     `autoscope_01_2021_velocidad.csv`; from mid-2025 they are
+#     `velocidad_promedio_julio_2026.zip`. Nothing about the first pattern
+#     predicts the second.
+#   - The `format` field lies. July 2026 is labelled "CSV" and its URL ends in
+#     `.zip`, and the distinct values of `format` across the resources include
+#     the string "csv zip". So the archive type is read off the URL extension
+#     and from nothing else.
+#
+# 68 resources as of August 2026, January 2021 onward, one per month with no gaps.
+# Eight of them (July-December 2023, July and August 2025) carry a null `size`,
+# which looks like a missing file and is not one: all eight serve normal CSVs when
+# asked, verified by range request. So `size` is used as a resume check when it is
+# present and simply skipped when it is not -- never as evidence that a month does
+# not exist.
+CKAN_API = "https://catalogodatos.gub.uy/api/3/action/package_show"
+DATASET_SLUG = "velocidad-promedio-vehicular-en-las-principales-avenidas-de-montevideo"
+
+# Downloads are stored exactly as published -- a `.zip` stays zipped. The ETL
+# extracts one month at a time to a scratch file and deletes it after ingest, so
+# peak disk is the archive plus one expanded month (~800 MB) rather than the
+# ~51 GB the whole history would occupy uncompressed. Keeping the bytes as
+# published is also what lets the ingest log verify a file against the size the
+# catalogue reports for it.
+#
+# The month is read from the CKAN resource *title* ("Velocidad promedio - Marzo
+# 2024") and then checked against the modal `fecha` in the readings themselves.
+# Titles are the part most likely to be renamed; the timestamps are the data.
+MONTHS_ES = (
+    "Enero",
+    "Febrero",
+    "Marzo",
+    "Abril",
+    "Mayo",
+    "Junio",
+    "Julio",
+    "Agosto",
+    "Septiembre",
+    "Octubre",
+    "Noviembre",
+    "Diciembre",
+)
+
+# --- Weather ------------------------------------------------------------------
+# From INUMET, published on the same catalogue as the speed data, so the whole
+# dashboard has one provenance story. Four separate datasets, one per variable,
+# each a single national CSV covering 2020 onward -- about 45 MB in total, which
+# is small enough to refetch whole rather than incrementally.
+#
+# INUMET publishes seven G3 stations nationwide and exactly one of them is in
+# Montevideo: Aeropuerto Melilla, in the northwest of the city. That is the
+# honest limitation of this crossing and it is stated in the app rather than
+# buried here. The station sits roughly 10 km from the centre of the sensor
+# field, so it reports the weather *system* over Montevideo well and a single
+# convective cell over 18 de Julio badly. Frontal rain -- which is what most
+# Montevideo rain is -- covers the whole city and is measured fine; a summer
+# thunderstorm may be caught at the airport and missed downtown, or the reverse.
+#
+# Coverage for January to mid-August 2026, measured: rain, temperature and
+# humidity are hourly at 99.4-99.5% of hours. Wind is reported roughly every
+# three hours (48% of hours), so it is carried but not used for the headline
+# wet/dry split.
+INUMET_DATASETS = {
+    # variable -> (CKAN slug, column in that dataset's CSV)
+    "precip_mm": (
+        "inumet-observaciones-meteorologicas-precipitacion-puntual-en-el-uruguay",
+        "precip_horario",
+    ),
+    "temp_c": (
+        "inumet-observaciones-meteorologicas-temperatura-del-aire-en-el-uruguay",
+        "temp_aire",
+    ),
+    "humidity_pct": (
+        "inumet-observaciones-meteorologicas-humedad-relativa-en-el-uruguay",
+        "hum_relativa",
+    ),
+    "wind_kmh": (
+        "inumet-observaciones-meteorologicas-direccion-e-intensidad-del-viento-en-el-uruguay",
+        "int_viento",
+    ),
+}
+INUMET_STATION = "Aeropuerto Melilla G3"
+
+# Where that station is, for the distance note in the app.
+INUMET_STATION_LATLON = (-34.7883, -56.2645)
+
+# A bucket counts as wet when the hour it falls in accumulated at least this
+# much. 0.1 mm is the smallest amount a tipping-bucket gauge resolves, so it is
+# the boundary between "measurably rained" and "did not", not a judgement about
+# how much rain matters.
+RAIN_WET_MM = 0.1
+
+# Heavy rain, kept as a separate band because the interesting question is whether
+# the speed penalty scales with intensity or saturates as soon as the road is wet.
+# 2.5 mm/h is the conventional moderate/heavy boundary.
+RAIN_HEAVY_MM = 2.5
+
+# A road stays wet after the rain stops, so an hour with no accumulation that
+# follows a wet one is not really a dry-road hour. Buckets are additionally
+# flagged as `recently_wet` when rain fell in the preceding this-many hours, and
+# the app's dry baseline excludes them -- otherwise the "dry" side of the
+# comparison quietly contains wet tarmac and the measured penalty shrinks.
+RAIN_LAG_HOURS = 2
+
+# --- Site identity across months ---------------------------------------------
+# A measuring site is identified by its coordinate and its three street labels,
+# and the coordinate has to be rounded before it is compared. The publisher
+# changed coordinate precision between March and April 2026: January through
+# March carry up to eight decimal places, April onward exactly six. The same
+# physical sensor is therefore written two different ways, and on the exact tuple
+# it splits into two sites -- 120 of them, each holding part of the year and each
+# computing its own "lifetime" free-flow reference from three or five months.
+# Nothing crashes; the map just grows a second dot per sensor and every reference
+# silently narrows.
+#
+# Six decimals is the fix, and the arithmetic is what fixes the value rather than
+# a tuned tolerance:
+#
+#   - Rounding to 6 dp moves a coordinate by at most 0.5e-6 deg, which is 5.6 cm
+#     in latitude and 4.6 cm in longitude at this latitude -- so two spellings of
+#     one point land at most ~7.3 cm apart. Measured worst case: 6.9 cm.
+#   - Two *distinct* 6-dp coordinates differ by at least 1e-6 deg, which is
+#     11.1 cm in latitude and 9.1 cm in longitude. Measured closest pair of
+#     genuinely different sites that report in the same month: 11.1 cm.
+#
+# The artifact is strictly smaller than the smallest real separation, so rounding
+# cannot merge two sensors that are actually different. Verified across the eight
+# 2026 files: 120 coordinate pairs merged, none of which ever reported in the same
+# month, which is the independent check -- two sites present in one month are
+# distinct by construction.
+COORD_DECIMALS = 6
 
 # --- Data cleaning -----------------------------------------------------------
 # Readings above this are sensor errors (the raw file tops out at 540 km/h on
@@ -238,6 +376,21 @@ TEXT_PRIMARY = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
 TEXT_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
+
+# De-emphasis, for context marks in an emphasis chart -- the series that are
+# present to be compared against rather than read individually. Deliberately low
+# contrast against the chart surface: the accent series has to win. This is
+# furniture rather than a categorical slot, so it is exempt from the chroma floor
+# every series colour has to clear.
+#
+# It exists because eight months cannot be told apart by hue. Stepping the blue
+# ramp into eight series puts adjacent months at OKLab dE 5.4 against a floor of
+# 15 -- a full-colour reader cannot separate April from May, let alone a
+# colour-blind one. Rather than a ninth attempt at a palette, the month curves use
+# one accent against this gray, which is the documented remedy for too many
+# series.
+DE_EMPHASIS = "#c4c2ba"
+ACCENT = "#2a78d6"
 
 
 def km_per_deg_lon(lat: float = CITY_LAT) -> float:
