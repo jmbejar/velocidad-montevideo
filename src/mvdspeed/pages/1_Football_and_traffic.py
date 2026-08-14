@@ -57,7 +57,6 @@ TIERS = {
 }
 
 WINDOWS = {
-    "Last half hour": ev.LAST_HALF_HOUR,
     "Before kick-off": ev.PRE_WINDOW,
     "During the match": ev.DURING_WINDOW,
     "After the whistle": ev.POST_WINDOW,

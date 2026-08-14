@@ -207,14 +207,19 @@ near-minus-far difference is:
 
 Both ends clear the placebo band. Egress is the larger: over the ninety minutes
 after the whistle the neighbourhood runs **−1.71 km/h** against the rest of the
-city, p = 0.000. Ingress is real but *sharp* — **−1.57 km/h in the last half
-hour before kick-off, p = 0.004** — and it all but vanishes when averaged over
-the preceding ninety minutes (−0.45, p = 0.16), which is why the page reports
-both windows. The single league clásico also shifts the evening peak **45
-minutes earlier** than its control days.
+city, p = 0.000. Ingress is real but *sharp* — **−1.57 km/h in the half hour
+before kick-off, p = 0.004**. The single league clásico also shifts the evening
+peak **45 minutes earlier** than its control days.
 
-Two slicing decisions are doing real work in those numbers, and both are easy to
-get wrong in the direction of finding nothing:
+Three slicing decisions are doing real work in those numbers, and all three are
+easy to get wrong in the direction of finding nothing:
+
+- **The pre-kick-off window is half an hour, not ninety minutes.** Whatever
+  happens before a match happens late, so a wider window averages it against
+  quiet time until it disappears: the same ingress effect reads −0.45 km/h,
+  p = 0.16 over the last ninety minutes, and city-wide before a Uruguay match
+  it is +1.31 km/h (p = 0.032) over half an hour against +0.56 (p = 0.29) over
+  ninety.
 
 - **Only matches played at that ground count.** Pooling in the nights the same
   clubs played across town adds days on which nothing happened inside the ring
