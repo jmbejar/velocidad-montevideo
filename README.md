@@ -93,6 +93,40 @@ sensor set moves onto roads the current extract does not cover.
   stratified and unstratified figures shown side by side.
 - **Rankings and street comparison**, plus a CSV export of the current slice.
 
+### A second page: football
+
+**Tránsito vs Fútbol** crosses the panel with a hand-curated fixture list and
+asks what a big match does to the city. The top of it is city-wide — an event
+study around kick-off against a placebo band, because the broadcast effect has
+no ground. Below that, **one panel per measurable ground**, showing the effect
+binned by distance. A ground only gets a panel if there are sensors around it,
+which is why the Campeón del Siglo has none: there is nothing within 8 km of it,
+so Peñarol's home ties are not measurable at the ground and the page says
+nothing rather than drawing an approach road and hoping it reads as a stadium
+effect. Then a per-sensor map and a per-match table.
+
+The method is written up in `src/mvdspeed/events.py`, which carries more than
+the page currently draws — `ring_study`, `ring_placebo` and `corridor_study`
+are tested and documented but not rendered. The short version of the method is
+in "Measuring a football match" below.
+
+The two calendars it needs are hand-typed and committed, because no feed we can
+reach publishes either:
+
+- `data/events/matches.csv` — one row per fixture with a Uruguay-local kick-off,
+  a `source` and a `verified` column. Rows whose kick-off time could not be
+  sourced are kept with `verified = time-unknown` and skipped by the estimator
+  rather than filled in with a guess. Fixtures judged too minor to study carry
+  `tier = blocked`: never offered as something to measure, but still barred from
+  serving as a control day, because a clásico final is not an ordinary Sunday
+  just because it has been left out of the analysis.
+- `data/events/holidays.csv` — Uruguayan public holidays, working holidays and
+  the bridge days around them. Not optional: Saturday 18 July 2026, *Jura de la
+  Constitución*, lights up 21 consecutive half hours and is otherwise
+  indistinguishable from a match evening.
+
+Adding a fixture is editing the CSV. Nothing needs rebuilding.
+
 ## What the data actually says
 
 Weekdays across 1 January – 12 August 2026, at 480 measuring points:
@@ -152,6 +186,112 @@ fall evenly across the day, so pooling every wet hour against every dry one
 compares a different mix of times as much as it compares weather. Pooled, the
 same data gives −1.15 km/h — about a quarter larger. The app shows both numbers
 side by side rather than asking you to trust the method.
+
+### Measuring a football match
+
+Two mechanisms, opposite signs, and only one of them is the one people expect.
+
+**Uruguay at the World Cup empties the city.** Across the three group matches,
+city-wide speed runs **+3.4 km/h (+10.3%)** above its matched baseline for the
+duration of the match — p = 0.000 against 500 placebo runs. It starts about 30
+minutes before kick-off and reverses afterwards: at +150 minutes the roads are
+1.1 km/h *slower* than normal as everyone leaves at once. There is no
+pre-kick-off congestion at all (+0.6 km/h, p = 0.29). All three matches were
+played in North America, so this is purely a broadcast effect.
+
+**Club football does not empty the city — only the national team does.** The
+fixture list carries Peñarol's and Nacional's *away* Libertadores ties as well
+as their home ones, and an away tie is the club-football equivalent of a World
+Cup match: same clubs, same competition, no ground in Montevideo. They move
+nothing. During the match, city-wide:
+
+| | Δ km/h | p |
+|---|---|---|
+| Uruguay at the World Cup | **+3.43** | 0.000 |
+| Libertadores **at home** | +0.72 | 0.010 |
+| Libertadores **away** | +0.16 | 0.57 |
+
+So the small positive on home nights is not television. It is the stadium's own
+effect leaking into a city-wide mean, and the away column is what tells you so.
+The ranking is the one you would guess and now has a number on it: the national
+team moves the city about five times harder than a club tie does, and a club tie
+with no ground in town does not move it at all. (One caveat the app states:
+three of the six away ties kick off at 23:00 against a latest of 21:30 at home,
+so they are measured on roads already a little emptier — a baseline of 34.5 km/h
+against 33.5. Small next to the effect it rules out, but not zero.)
+
+**And what a home match does is local.** Subtracting the far ring from the near
+one separates the two. Across Nacional's four home matches at the Gran Parque
+Central, the near-minus-far difference is:
+
+| Minutes from kick-off | Difference | Placebo 5th–95th |
+|---|---|---|
+| −30 | **−1.57** | −1.00 … +0.86 |
+| 0 | −1.10 | −1.05 … +0.80 |
+| +120 | −1.69 | −0.83 … +0.62 |
+| **+150** | **−2.54** | −0.74 … +0.58 |
+
+Both ends clear the placebo band. Egress is the larger: over the ninety minutes
+after the whistle the neighbourhood runs **−1.71 km/h** against the rest of the
+city, p = 0.000. Ingress is real but *sharp* — **−1.57 km/h in the half hour
+before kick-off, p = 0.004**. The single league clásico also shifts the evening
+peak **45 minutes earlier** than its control days.
+
+Three slicing decisions are doing real work in those numbers, and all three are
+easy to get wrong in the direction of finding nothing:
+
+- **The pre-kick-off window is half an hour, not ninety minutes.** Whatever
+  happens before a match happens late, so a wider window averages it against
+  quiet time until it disappears: the same ingress effect reads −0.45 km/h,
+  p = 0.16 over the last ninety minutes, and city-wide before a Uruguay match
+  it is +1.31 km/h (p = 0.032) over half an hour against +0.56 (p = 0.29) over
+  ninety.
+
+- **Only matches played at that ground count.** Pooling in the nights the same
+  clubs played across town adds days on which nothing happened inside the ring
+  and drags the estimate toward zero: the same ingress figure reads −0.61 km/h,
+  p = 0.16, once Peñarol's three home nights are mixed in.
+- **The near ring is reported against the far one, not against zero.** On a
+  match night the city empties and the neighbourhood clogs at the same moment.
+  The far ring gets the television and not the stadium, so the difference is the
+  only line in the app that is about people travelling to a ground.
+- **A city-wide average is the wrong instrument entirely**, and the app draws
+  the reason rather than asserting it. Binned by distance from the Gran Parque
+  Central in the half hour before kick-off, the effect **changes sign**:
+
+  | Distance | Δ km/h |
+  |---|---|
+  | 0–1 km | **−1.85** |
+  | 1–2 km | −0.86 |
+  | 2–3 km | −0.35 |
+  | 3–5 km | **+0.60** |
+  | 5–8 km | +0.38 |
+  | **whole city** | **−0.33** |
+
+  The city-wide figure is not a small effect. It is two large ones cancelling,
+  and it describes neither end of the curve. This generalises well beyond
+  football: any effect with opposite signs in different places reads as "no
+  effect" in an aggregate.
+
+**Peñarol's ground cannot be measured at all.** The Campeón del Siglo is out in
+Bañados de Carrasco and the nearest sensor is 8.1 km away, on Camino Carrasco.
+A distance-banded read of the approach road — 8 de Octubre out to Camino
+Carrasco — comes out noisy and without a usable gradient across three home
+matches, so the app draws no panel for that ground rather than an inconclusive
+one that could be mistaken for a measurement. The Gran Parque Central, by
+contrast, has 32 sensors inside a kilometre and the nearest 298 m away — it is
+the one ground in the study that can be measured at all. Peñarol's *away* ties
+are still measurable, because those are television and television is city-wide.
+
+**The baseline is the whole problem.** Measured against a norm pooled over the
+whole Jan–Aug panel, *every* June weekday afternoon reads 0.54 km/h slow, because
+January — when Montevideo empties for the summer — sits 2.07 km/h above the same
+average. That artefact has the same sign and roughly the same size as the
+pre-kick-off congestion the page was built to look for. So the counterfactual is
+the same sensor, the same half hour, the same weekday, on nearby dates with no
+fixture and no holiday; and the uncertainty is 500 placebo runs of the identical
+estimator on days when nothing happened, not a t-test that 4.4 M serially
+correlated rows would drive to zero regardless.
 
 ## Reading the data honestly
 
@@ -300,16 +440,32 @@ src/mvdspeed/
   etl.py      monthly archives -> parquet (duckdb), panel-wide references
   weather.py  INUMET hourly observations -> weather.parquet
   data.py     loading and slicing, including the rain crossing
+  events.py   the football crossing: matched controls, placebo bands, rings
   surface.py  kernel-weighted heat surface over the point sensors
   streets.py  sensor -> road matching, and the three reach models
   osm.py      one-off Overpass fetch -> data/streets.parquet
   colors.py   value -> colour scales and legends
-  app.py      the Streamlit dashboard
+  charts.py   axis chrome and the categorical hues, shared by both pages
+  app.py      entry point: names the pages, runs the navigation
+  views/
+    home.py       speed by time of day, crossed with rain
+    football.py   what a big match does to traffic
+data/events/
+  matches.csv   hand-curated fixtures, one source URL per row
+  holidays.csv  Uruguayan holidays, so they never become control days
 tests/
   test_fetch.py            month-name parsing across the feed's spellings
   test_etl.py              the histogram quantile, against quantile_cont
   test_weather_crossing.py the rain stratification, on known answers
+  test_events.py           the match estimator, incl. the January artefact
 ```
+
+`app.py` is a twenty-line `st.navigation` router and nothing else. Streamlit's
+`pages/` directory convention is cheaper to set up but takes each sidebar label
+from a filename, which is fine until the entry point is itself a page — then the
+label is "app": accurate about the file, useless about the contents. The pages
+are listed as script paths rather than imported, so each still runs top to
+bottom on its own and neither knows the other exists.
 
 ## Visual design notes
 
